@@ -28,7 +28,6 @@ customer_path = "/Users/vincecoppens/Documents/Courses/Big Data/AdvancedAnalytic
 df_transactions = pd.read_csv(transactions_path, parse_dates=['order_date', 'pack_date'])
 df_customer = pd.read_csv(customer_path)
 
-
 # %%
 # Merge transaction data with customer-level information using cust_id
 df = pd.merge(df_transactions, df_customer, on='cust_id', how='left')
