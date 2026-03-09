@@ -114,6 +114,9 @@ if "sale_revenue" in df.columns:
 else:
     df["sale_revenue_pos"] = 0.0
 
+
+# %%
+df
 # %% [markdown]
 # ## Date features
 
