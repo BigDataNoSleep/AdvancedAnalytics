@@ -442,6 +442,78 @@ def build_customer_features(df_input):
         customer_features['n_products']
     )
 
+    # Advanced behavioural signals
+    last_order_value = (
+        df_local.sort_values('order_date')
+        .groupby('cust_id')['sale_revenue']
+        .last()
+        .rename('last_order_value')
+    )
+
+    first_order_value = (
+        df_local.sort_values('order_date')
+        .groupby('cust_id')['sale_revenue']
+        .first()
+        .rename('first_order_value')
+    )
+
+    customer_features = customer_features.merge(last_order_value, on='cust_id')
+    customer_features = customer_features.merge(first_order_value, on='cust_id')
+
+    # Order spacing
+    df_local = df_local.sort_values(['cust_id','order_date'])
+    df_local['prev_order_date'] = df_local.groupby('cust_id')['order_date'].shift(1)
+    df_local['days_between_orders'] = (
+        df_local['order_date'] - df_local['prev_order_date']
+    ).dt.days
+
+    avg_days_between = (
+        df_local.groupby('cust_id')['days_between_orders']
+        .mean()
+        .rename('avg_days_between_orders')
+    )
+
+    customer_features = customer_features.merge(avg_days_between, on='cust_id', how='left')
+    customer_features['avg_days_between_orders'] = customer_features['avg_days_between_orders'].fillna(0)
+
+    # Discount depth
+    total_discount = (
+        df_local.groupby('cust_id')['sale_discount_applied']
+        .sum()
+        .rename('total_discount')
+    )
+
+    customer_features = customer_features.merge(total_discount, on='cust_id')
+    
+    # Outlet behaviour
+    outlet_rate = (
+        df_local.groupby('cust_id')['prod_outlet']
+        .mean()
+        .rename('outlet_rate')
+    )
+    customer_features = customer_features.merge(outlet_rate, on='cust_id')
+
+    customer_features['discount_ratio'] = (
+        customer_features['total_discount'] /
+        (customer_features['total_spent'] + 1e-9)
+    )
+
+    # Diversity ratios
+    customer_features['product_diversity_ratio'] = (
+        customer_features['n_products'] /
+        customer_features['n_orders']
+    )
+
+    customer_features['brand_diversity_ratio'] = (
+        customer_features['n_brands'] /
+        customer_features['n_orders']
+    )
+
+    customer_features['returns_per_order'] = (
+        customer_features['n_returns'] /
+        customer_features['n_orders']
+    )
+
     # Recent behaviour
     recent_cutoff = max_date - pd.Timedelta(days=90)
 
@@ -473,6 +545,32 @@ def build_customer_features(df_input):
     customer_features['revenue_std'] = customer_features['revenue_std'].fillna(0)
     customer_features['discount_std'] = customer_features['discount_std'].fillna(0)
 
+    # Log versions of skewed features (keep originals for tree models)
+    customer_features['log_total_spent'] = np.log1p(customer_features['total_spent'].clip(lower=0))
+    customer_features['log_revenue_last_90d'] = np.log1p(customer_features['revenue_last_90d'].clip(lower=0))
+    customer_features['log_avg_order_value'] = np.log1p(customer_features['avg_order_value'].clip(lower=0))
+
+    # Binary activity signals (often strong predictors)
+    customer_features['has_recent_orders'] = (
+        customer_features['orders_last_90d'] > 0
+    ).astype(int)
+
+    customer_features['has_returns'] = (
+        customer_features['n_returns'] > 0
+    ).astype(int)
+
+    # Spending trend (growth signal)
+    customer_features['spending_trend'] = (
+        customer_features['last_order_value'] -
+        customer_features['first_order_value']
+    )
+
+    # Ratio of recent revenue vs historical
+    customer_features['recent_revenue_ratio'] = (
+        customer_features['revenue_last_90d'] /
+        (customer_features['total_spent'] + 1)
+    )
+
     numeric_cols = customer_features.select_dtypes(include=[np.number]).columns
     customer_features[numeric_cols] = customer_features[numeric_cols].fillna(0)
 
@@ -489,293 +587,6 @@ customer_features_test = build_customer_features(df_test)
 
 print("Train customer features:", customer_features.shape)
 print("Test customer features:", customer_features_test.shape)
-
-# ------------------------------------------------------------
-# COHORT 1 — Activity behaviour (how active is the customer)
-# ------------------------------------------------------------
-activity_features = df_train.groupby('cust_id').agg(
-    n_orders = ('order_date','nunique'),
-    n_products = ('prod_id','nunique'),
-    n_brands = ('prod_brand','nunique'),
-    n_categories = ('prod_type_1','nunique'),
-    n_colors = ('prod_color','nunique')
-)
-
-# ------------------------------------------------------------
-# COHORT 2 — Financial behaviour (how customer spends)
-# ------------------------------------------------------------
-financial_features = df_train.groupby('cust_id').agg(
-    total_spent = ('sale_revenue','sum'),
-    avg_order_value = ('sale_revenue','mean'),
-    max_order_value = ('sale_revenue','max'),
-    revenue_std = ('sale_revenue','std'),
-    revenue_median = ('sale_revenue','median')
-)
-
-# ------------------------------------------------------------
-# COHORT 3 — Discount behaviour
-# ------------------------------------------------------------
-discount_features = df_train.groupby('cust_id').agg(
-    avg_discount = ('sale_discount_applied','mean'),
-    max_discount = ('sale_discount_applied','min'),
-    discount_std = ('sale_discount_applied','std')
-)
-
-# ------------------------------------------------------------
-# COHORT 4 — Return behaviour
-# ------------------------------------------------------------
-return_features = df_train.groupby('cust_id').agg(
-    return_rate = ('returned','mean'),
-    n_returns = ('returned','sum'),
-    returned_flag = ('returned','max')
-)
-
-# ------------------------------------------------------------
-# COHORT 5 — Logistics behaviour
-# ------------------------------------------------------------
-logistics_features = df_train.groupby('cust_id').agg(
-    avg_days_to_pack = ('days_to_pack','mean')
-)
-
-# ------------------------------------------------------------
-# COHORT 6 — Time behaviour (CLV critical features)
-# ------------------------------------------------------------
-time_features = df_train.groupby('cust_id').agg(
-    first_order_date = ('order_date','min'),
-    last_order_date = ('order_date','max')
-)
-
-# ------------------------------------------------------------
-# Merge base cohorts
-# ------------------------------------------------------------
-customer_features = (
-    activity_features
-    .join(financial_features)
-    .join(discount_features)
-    .join(return_features)
-    .join(logistics_features)
-    .join(time_features)
-    .reset_index()
-)
-
-# ------------------------------------------------------------
-# Derived time features
-# ------------------------------------------------------------
-
-customer_features['customer_lifetime_days'] = (
-    customer_features['last_order_date'] -
-    customer_features['first_order_date']
-).dt.days
-
-max_date = df_train['order_date'].max()
-
-customer_features['recency_days'] = (
-    max_date - customer_features['last_order_date']
-).dt.days
-
-# Original frequency metric (kept for comparison)
-customer_features['orders_per_day_raw'] = (
-    customer_features['n_orders'] /
-    (customer_features['customer_lifetime_days'] + 1)
-)
-
-# Stabilised frequency metric (recommended for modelling)
-customer_features['orders_per_day'] = (
-    customer_features['n_orders'] /
-    (customer_features['customer_lifetime_days'] + 30)
-)
-
-# ------------------------------------------------------------
-# COHORT 7 — Brand preference behaviour
-# ------------------------------------------------------------
-
-brand_counts = (
-    df_train.groupby(['cust_id','prod_brand'])
-    .size()
-    .reset_index(name='brand_orders')
-)
-
-brand_counts_sorted = brand_counts.sort_values(
-    ['cust_id','brand_orders'],
-    ascending=[True, False]
-)
-
-top_brand = brand_counts_sorted.drop_duplicates('cust_id')
-
-top_brand = top_brand.rename(columns={
-    'prod_brand':'favorite_brand',
-    'brand_orders':'favorite_brand_orders'
-})
-
-customer_features = customer_features.merge(
-    top_brand[['cust_id','favorite_brand','favorite_brand_orders']],
-    on='cust_id',
-    how='left'
-)
-
-customer_features['favorite_brand_share'] = (
-    customer_features['favorite_brand_orders'] /
-    customer_features['n_products']
-)
-
-# ------------------------------------------------------------
-# COHORT 8 — Advanced behavioural signals
-# ------------------------------------------------------------
-
-customer_features['revenue_std'] = customer_features['revenue_std'].fillna(0)
-customer_features['discount_std'] = customer_features['discount_std'].fillna(0)
-
-last_order_value = (
-    df_train.sort_values('order_date')
-    .groupby('cust_id')['sale_revenue']
-    .last()
-    .rename('last_order_value')
-)
-
-first_order_value = (
-    df_train.sort_values('order_date')
-    .groupby('cust_id')['sale_revenue']
-    .first()
-    .rename('first_order_value')
-)
-
-customer_features = customer_features.merge(last_order_value, on='cust_id')
-customer_features = customer_features.merge(first_order_value, on='cust_id')
-
-# Order spacing
-
-df_train = df_train.sort_values(['cust_id','order_date'])
-
-df_train['prev_order_date'] = df_train.groupby('cust_id')['order_date'].shift(1)
-
-df_train['days_between_orders'] = (
-    df_train['order_date'] - df_train['prev_order_date']
-).dt.days
-
-avg_days_between = (
-    df_train.groupby('cust_id')['days_between_orders']
-    .mean()
-    .rename('avg_days_between_orders')
-)
-
-customer_features = customer_features.merge(avg_days_between, on='cust_id', how='left')
-
-customer_features['avg_days_between_orders'] = (
-    customer_features['avg_days_between_orders'].fillna(0)
-)
-
-# Discount depth
-
-total_discount = (
-    df_train.groupby('cust_id')['sale_discount_applied']
-    .sum()
-    .rename('total_discount')
-)
-
-customer_features = customer_features.merge(total_discount, on='cust_id')
-
-customer_features['discount_ratio'] = (
-    customer_features['total_discount'] /
-    customer_features['total_spent']
-)
-
-# Outlet behaviour
-
-outlet_rate = (
-    df_train.groupby('cust_id')['prod_outlet']
-    .mean()
-    .rename('outlet_rate')
-)
-
-customer_features = customer_features.merge(outlet_rate, on='cust_id')
-
-# Diversity ratios
-
-customer_features['product_diversity_ratio'] = (
-    customer_features['n_products'] /
-    customer_features['n_orders']
-)
-
-customer_features['brand_diversity_ratio'] = (
-    customer_features['n_brands'] /
-    customer_features['n_orders']
-)
-
-customer_features['returns_per_order'] = (
-    customer_features['n_returns'] /
-    customer_features['n_orders']
-)
-
-# ------------------------------------------------------------
-# COHORT 9 — Recent behaviour (short-term activity signals)
-# ------------------------------------------------------------
-
-# Define recent window (last 90 days of dataset)
-recent_cutoff = max_date - pd.Timedelta(days=90)
-
-recent_transactions = df_train[df_train['order_date'] >= recent_cutoff]
-
-# Orders in last 90 days
-recent_orders = (
-    recent_transactions.groupby('cust_id')['order_date']
-    .nunique()
-    .rename('orders_last_90d')
-)
-
-# Revenue in last 90 days
-recent_revenue = (
-    recent_transactions.groupby('cust_id')['sale_revenue']
-    .sum()
-    .rename('revenue_last_90d')
-)
-
-customer_features = customer_features.merge(recent_orders, on='cust_id', how='left')
-customer_features = customer_features.merge(recent_revenue, on='cust_id', how='left')
-
-customer_features['orders_last_90d'] = customer_features['orders_last_90d'].fillna(0)
-customer_features['revenue_last_90d'] = customer_features['revenue_last_90d'].fillna(0)
-
-# Recent activity flag (active recently)
-
-customer_features['recent_active_flag'] = (
-    customer_features['recency_days'] <= 90
-).astype(int)
-
-# ------------------------------------------------------------
-# FEATURE STABILITY FIXES (prepare for modelling but keep options open)
-# ------------------------------------------------------------
-
-# Log versions of skewed features (keep originals for tree models)
-customer_features['log_total_spent'] = np.log1p(customer_features['total_spent'])
-customer_features['log_revenue_last_90d'] = np.log1p(customer_features['revenue_last_90d'])
-customer_features['log_avg_order_value'] = np.log1p(customer_features['avg_order_value'])
-
-# Binary activity signals (often strong predictors)
-customer_features['has_recent_orders'] = (
-    customer_features['orders_last_90d'] > 0
-).astype(int)
-
-customer_features['has_returns'] = (
-    customer_features['n_returns'] > 0
-).astype(int)
-
-# Spending trend (growth signal)
-customer_features['spending_trend'] = (
-    customer_features['last_order_value'] -
-    customer_features['first_order_value']
-)
-
-# Ratio of recent revenue vs historical
-customer_features['recent_revenue_ratio'] = (
-    customer_features['revenue_last_90d'] /
-    (customer_features['total_spent'] + 1)
-)
-
-# Fill any remaining numeric NaN created during feature engineering
-numeric_cols = customer_features.select_dtypes(include=[np.number]).columns
-customer_features[numeric_cols] = customer_features[numeric_cols].fillna(0)
-
-print("Feature stability improvements added")
 
 # ------------------------------------------------------------
 # TARGET MERGE — Add future revenue to customer feature table
@@ -1017,6 +828,7 @@ brand_freq = customer_model_df['favorite_brand'].value_counts(normalize=True)
 customer_model_df['favorite_brand_freq'] = (
     customer_model_df['favorite_brand'].map(brand_freq)
 )
+customer_model_df = customer_model_df.drop(columns=['favorite_brand'])
 
 # Fill any missing values created by encoding
 customer_model_df = customer_model_df.fillna(0)
@@ -1024,4 +836,115 @@ customer_model_df = customer_model_df.fillna(0)
 print("Final modelling dataset shape:", customer_model_df.shape)
 print(customer_model_df.head())
 
+# ------------------------------------------------------------
+# Apply same preprocessing to competition test set
+# ------------------------------------------------------------
+
+customer_model_df_test = customer_features_test.drop(columns=cols_to_drop).copy()
+
+# Apply same brand encoding
+customer_model_df_test['favorite_brand_encoded'] = (
+    customer_model_df_test['favorite_brand']
+    .astype('category')
+    .cat.codes
+)
+
+# Apply frequency encoding using TRAIN mapping (important: no refit)
+customer_model_df_test['favorite_brand_freq'] = (
+    customer_model_df_test['favorite_brand'].map(brand_freq)
+)
+customer_model_df_test = customer_model_df_test.drop(columns=['favorite_brand'])
+
+# Fill any missing values
+customer_model_df_test = customer_model_df_test.fillna(0)
+
+print("Final test modelling dataset shape:", customer_model_df_test.shape)
+print(customer_model_df_test.head())
+
 # %%
+# ============================================================
+# TRAIN / VALIDATION / LOCAL TEST SPLIT (from competition train)
+# ============================================================
+
+from sklearn.model_selection import train_test_split
+
+# Separate features and target
+X = customer_model_df.drop(columns=['revenue_2018_2019'])
+y = customer_model_df['revenue_2018_2019']
+
+# First split: train vs temp (80 / 20)
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X,
+    y,
+    test_size=0.20,
+    random_state=42
+)
+
+# Second split: validation vs test (10 / 10)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_temp,
+    y_temp,
+    test_size=0.50,
+    random_state=42
+)
+
+print("Train shape:", X_train.shape)
+print("Validation shape:", X_val.shape)
+print("Local test shape:", X_test.shape)
+
+# %%
+# ============================================================
+# FEATURE DOCUMENTATION (customer modelling dataset)
+# ============================================================
+
+feature_descriptions = {
+    'n_orders': 'Number of unique orders placed by customer',
+    'n_products': 'Number of unique products purchased',
+    'n_brands': 'Number of unique brands purchased',
+    'n_categories': 'Number of unique product categories purchased',
+    'n_colors': 'Number of unique product colours purchased',
+    'total_spent': 'Total historical revenue from customer',
+    'avg_order_value': 'Average revenue per order',
+    'max_order_value': 'Maximum order value observed',
+    'revenue_std': 'Standard deviation of order revenue',
+    'revenue_median': 'Median order revenue',
+    'avg_discount': 'Average discount received',
+    'max_discount': 'Maximum discount received',
+    'discount_std': 'Variation in discounts received',
+    'return_rate': 'Fraction of orders returned',
+    'n_returns': 'Total number of returned items',
+    'returned_flag': 'Binary indicator if customer ever returned',
+    'avg_days_to_pack': 'Average logistics processing time',
+    'customer_lifetime_days': 'Days between first and last purchase',
+    'recency_days': 'Days since last purchase',
+    'orders_per_day': 'Stabilised purchase frequency',
+    'favorite_brand_orders': 'Orders from favourite brand',
+    'favorite_brand_share': 'Share of purchases from favourite brand',
+    'last_order_value': 'Revenue of most recent order',
+    'first_order_value': 'Revenue of first order',
+    'avg_days_between_orders': 'Average spacing between purchases',
+    'total_discount': 'Total discounts received',
+    'discount_ratio': 'Discount relative to total spend',
+    'outlet_rate': 'Fraction of purchases from outlet items',
+    'product_diversity_ratio': 'Products per order ratio',
+    'brand_diversity_ratio': 'Brands per order ratio',
+    'returns_per_order': 'Returns relative to orders',
+    'orders_last_90d': 'Orders in last 90 days',
+    'revenue_last_90d': 'Revenue in last 90 days',
+    'recent_active_flag': 'Customer active in last 90 days',
+    'log_total_spent': 'Log transformed total spend',
+    'log_revenue_last_90d': 'Log transformed recent revenue',
+    'log_avg_order_value': 'Log transformed average order value',
+    'has_recent_orders': 'Binary indicator of recent orders',
+    'has_returns': 'Binary indicator of returns',
+    'spending_trend': 'Difference between last and first order value',
+    'recent_revenue_ratio': 'Recent revenue relative to historical spend',
+    'favorite_brand_encoded': 'Label encoded favourite brand',
+    'favorite_brand_freq': 'Frequency encoding of favourite brand',
+    'revenue_2018_2019': 'Target: future customer revenue'
+}
+
+print("\nFeature documentation:")
+for k,v in feature_descriptions.items():
+    if k in customer_model_df.columns:
+        print(f"{k:<30} : {v}")
