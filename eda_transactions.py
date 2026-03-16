@@ -309,137 +309,146 @@ print("Removeing duplicates...")
 df = df.loc[~df_check.duplicated()]
 
 # %% [markdown]
-# Till here i (Vince) worked on monday 9 march. I did some basic cleaning and EDA.
-#  I will continue on tuesday 10 march with more feature engineering and visualizations.
+# ============================================================
+# Competition split based on target availability
+# ============================================================
+
+# Transactions from customers with known revenue (train)
+df_train = df[df['revenue_2018_2019'].notna()].copy()
+
+# Transactions from customers with unknown revenue (competition test)
+df_test = df[df['revenue_2018_2019'].isna()].copy()
+
+print("Train transactions:", df_train.shape)
+print("Competition test transactions:", df_test.shape)
+
+print("Train customers:", df_train['cust_id'].nunique())
+print("Test customers:", df_test['cust_id'].nunique())
+
+# %% [markdown]
+# ============================================================
+# Transaction-level feature preparation (needed for aggregation)
+# ============================================================
+
+df_train['days_to_pack'] = (df_train['pack_date'] - df_train['order_date']).dt.days
+
+df_train['returned'] = df_train['returned_to_shop_id'] != 'none'
 
 # %%
 # ============================================================
-# Feature engineering
+# Customer feature engineering (rich behavioural aggregation)
+# We summarise transaction behaviour into customer-level signals
 # ============================================================
-# Calculate packing delay (days between order and packing)
-df['days_to_pack'] = (df['pack_date'] - df['order_date']).dt.days
-df
 
-# ------------------------------------------------------------
-# Data consistency checks
-# ------------------------------------------------------------
+customer_features = df_train.groupby('cust_id').agg(
+    # =========================
+    # Activity features
+    # =========================
+    n_orders = ('order_date','nunique'),                 # how often customer buys
+    n_products = ('prod_id','nunique'),                  # product diversity
+    n_brands = ('prod_brand','nunique'),                 # brand diversity
+    n_categories = ('prod_type_1','nunique'),            # men/women/kids diversity
+    n_colors = ('prod_color','nunique'),                 # style diversity
 
-# Check for impossible dates (pack_date before order_date)
-invalid_pack_dates = (df['pack_date'] < df['order_date']).sum()
-print("Transactions with pack_date earlier than order_date:", invalid_pack_dates)
+    # =========================
+    # Financial behaviour
+    # =========================
+    total_spent = ('sale_revenue','sum'),                # total historical value
+    avg_order_value = ('sale_revenue','mean'),           # typical spend
+    max_order_value = ('sale_revenue','max'),            # premium behaviour
+    revenue_std = ('sale_revenue','std'),                # spending variability
+    revenue_median = ('sale_revenue','median'),          # robust central spend
 
-# Check distribution of discount values
-print("\nDiscount statistics:")
-print(df['sale_discount_applied'].describe())
+    # =========================
+    # Discount behaviour
+    # =========================
+    avg_discount = ('sale_discount_applied','mean'),     # discount sensitivity
+    max_discount = ('sale_discount_applied','min'),      # strongest discount taken
+    discount_std = ('sale_discount_applied','std'),      # discount variability
 
-# Check for extremely large revenue values
-print("\nRevenue upper quantiles:")
-print(df['sale_revenue'].quantile([0.99, 0.999]))
-# %%
-# Binary indicator showing whether the product was returned
-#
-# 'returned_to_shop_id' was previously filled with "none" for non-returned items
-# Therefore a return occurred only when the value is different from "none"
-df['returned'] = df['returned_to_shop_id'] != "none"
-df
+    # =========================
+    # Return behaviour
+    # =========================
+    return_rate = ('returned','mean'),                   # fraction of returns
+    n_returns = ('returned','sum'),                      # total returns
+    returned_flag = ('returned','max'),                  # ever returned (0/1)
 
-# %% [markdown]
-# ## Brand Frequency
-brand_counts = df['prod_brand'].value_counts()
-top_brands_counts = brand_counts[brand_counts > 1500]
-top_brands_names = top_brands_counts.index
+    # =========================
+    # Logistics behaviour
+    # =========================
+    avg_days_to_pack = ('days_to_pack','mean'),          # avg processing delay
 
-print(f"Number of unique brands: {df['prod_brand'].nunique()}")
-print(f"Total items in table: {len(df)}")
-print(f"Items from brands with >1500 occurrences: {top_brands_counts.sum()} ({(top_brands_counts.sum() / len(df)) * 100:.2f}% of total)")
+    # =========================
+    # Time behaviour (very important for CLV)
+    # =========================
+    first_order_date = ('order_date','min'),
+    last_order_date = ('order_date','max')
+)
 
-plt.figure(figsize=(12, 6))
-sns.countplot(data=df[df['prod_brand'].isin(top_brands_names)], x='prod_brand', order=top_brands_names)
-plt.title('Frequency of Brands (appearing > 1500 times)')
-plt.xticks(rotation=45)
-plt.show()
+customer_features = customer_features.reset_index()
 
-# # %%
-# # Relative market share per brand (based on transaction frequency)
-# df['brand_market_share'] = df['prod_brand'].map(df['prod_brand'].value_counts(normalize=True))
+# ============================================================
+# Derived time features
+# ============================================================
 
-# # Average revenue per brand
-# df['brand_avg_revenue'] = df.groupby('prod_brand')['revenue_2018_2019'].transform('mean')
-# df
+# Customer lifetime (activity window)
+customer_features['customer_lifetime_days'] = (
+    customer_features['last_order_date'] -
+    customer_features['first_order_date']
+).dt.days
 
+# Recency (days since last purchase relative to dataset end)
+max_date = df_train['order_date'].max()
+customer_features['recency_days'] = (
+    max_date - customer_features['last_order_date']
+).dt.days
 
- 
-# encoden: prod season, prod_color, prod_type1, prod_heel
-# prod_clasp: to be encoded but pretty fucked up
-# prod_print changing to print? Yes/No
+# Purchase frequency
+customer_features['orders_per_day'] = (
+    customer_features['n_orders'] /
+    (customer_features['customer_lifetime_days'] + 1)
+)
 
-#Prod_type 3, 4 and 5 + prod_material + prod comfort wear + prod comfort sole???? (To be removed?)
+print("Customer feature table shape:", customer_features.shape)
+customer_features.head()
 
-# # %%
-# # Drop 'prod_type_4' column
-# df.drop(columns=['prod_type_4'], inplace=True)
-# prod_id will be removed later
-# prod_title to be removed
+# ============================================================
+# Brand preference features (captures loyalty vs exploration)
+# ============================================================
 
+# Count how many times each customer buys each brand
+brand_counts = (
+    df_train.groupby(['cust_id','prod_brand'])
+    .size()
+    .reset_index(name='brand_orders')
+)
 
-# %%
+# Find most purchased brand per customer
+brand_counts_sorted = brand_counts.sort_values(
+    ['cust_id','brand_orders'],
+    ascending=[True, False]
+)
 
-# %% [markdown]
-# ## Basic Stats
-# Summary statistics for numerical columns
+top_brand = brand_counts_sorted.drop_duplicates('cust_id')
 
-# %%
-# Summary statistics for numerical columns
-df.describe()
+top_brand = top_brand.rename(columns={
+    'prod_brand':'favorite_brand',
+    'brand_orders':'favorite_brand_orders'
+})
 
-# %% [markdown]
-# ## Visual Analytics
-# ### Distribution (Histogram)
-# Visualize distribution of transaction revenue
+# Merge into customer feature table
+customer_features = customer_features.merge(
+    top_brand[['cust_id','favorite_brand','favorite_brand_orders']],
+    on='cust_id',
+    how='left'
+)
 
-# %%
-plt.figure(figsize=(10, 6))
-sns.histplot(df['sale_revenue'], bins=50, kde=True)
-plt.title('Distribution of Sale Revenue')
-plt.xlabel('Revenue')
-plt.ylabel('Frequency')
-plt.show()
-
-# %% [markdown]
-# ### Outliers (Boxplot)
-# Boxplots help detect extreme values in revenue and discount variables
-
-# %%
-plt.figure(figsize=(12, 6))
-plt.subplot(1, 2, 1)
-sns.boxplot(y=df['sale_revenue'])
-plt.title('Boxplot of Sale Revenue')
-
-plt.subplot(1, 2, 2)
-sns.boxplot(y=df['sale_discount_applied'])
-plt.title('Boxplot of Discount Applied')
-plt.show()
-
-# %% [markdown]
-# ### Relationships (Scatter Plot)
-# Scatter plot to explore relationship between discounts and revenue
-
-# %%
-plt.figure(figsize=(10, 6))
-sns.scatterplot(data=df, x='sale_discount_applied', y='sale_revenue', alpha=0.5)
-plt.title('Sale Revenue vs. Discount Applied')
-plt.show()
-
-# %% [markdown]
-# ### Correlation Plot
-# Correlation heatmap for numerical variables
-# Helps identify strongly related predictors
+# Brand loyalty: share of orders from favourite brand
+customer_features['favorite_brand_share'] = (
+    customer_features['favorite_brand_orders'] /
+    customer_features['n_orders']
+)
 
 # %%
-# Select only numerical columns for correlation
-numerical_df = df.select_dtypes(include=[np.number])
-
-plt.figure(figsize=(12, 10))
-sns.heatmap(numerical_df.corr(), annot=True, cmap='coolwarm', fmt=".2f")
-plt.title('Correlation Matrix of Numerical Features')
-plt.show()
+customer_features
+# %%
