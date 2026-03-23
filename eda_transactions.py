@@ -801,14 +801,13 @@ print(low_variance.tail(10))
 # ------------------------------------------------------------
 
 cols_to_drop = [
-    'cust_id',            # identifier (no predictive value)
     'first_order_date',   # raw dates not suitable for models
     'last_order_date'
 ]
 
-customer_model_df = customer_features.drop(columns=cols_to_drop).copy()
+customer_model_df = customer_features.set_index('cust_id').drop(columns=cols_to_drop).copy()
 
-print("Removed ID and raw date columns")
+print("Set cust_id as index and removed raw date columns")
 
 # ------------------------------------------------------------
 # Encode favorite brand (keep original for flexibility)
@@ -840,7 +839,7 @@ print(customer_model_df.head())
 # Apply same preprocessing to competition test set
 # ------------------------------------------------------------
 
-customer_model_df_test = customer_features_test.drop(columns=cols_to_drop).copy()
+customer_model_df_test = customer_features_test.set_index('cust_id').drop(columns=cols_to_drop).copy()
 
 # Apply same brand encoding
 customer_model_df_test['favorite_brand_encoded'] = (
@@ -948,3 +947,15 @@ print("\nFeature documentation:")
 for k,v in feature_descriptions.items():
     if k in customer_model_df.columns:
         print(f"{k:<30} : {v}")
+
+def get_customer_model_data():
+
+    return (
+        X_train.copy(),
+        X_val.copy(),
+        X_test.copy(),
+        y_train.copy(),
+        y_val.copy(),
+        y_test.copy(),
+        customer_model_df_test.copy()
+    )
