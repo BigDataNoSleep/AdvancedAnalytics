@@ -1,5 +1,4 @@
 """
-
 Lego Minifig Dataset — Preprocessing
 =====================================
 Steps:
@@ -67,7 +66,7 @@ print(f"Rows kept      : {len(df)}")
 # ── 4. REORDER ROWS TO FOLLOW THE IMAGE FILE LIST ────────────────────────────
 # Sort image filenames alphabetically (same order as a directory listing),
 # then reindex the dataframe to match that order.
-sorted_filenames = sorted(image_files)                         # alphabetical
+sorted_filenames = sorted(image_files)
 stem_to_order    = {os.path.splitext(f)[0].upper(): i
                     for i, f in enumerate(sorted_filenames)}
 
@@ -78,15 +77,3 @@ df.reset_index(drop=True, inplace=True)
 
 print(f"\nFirst 5 minifig_numbers after reorder: {df['minifig_number'].head().tolist()}")
 
-# ── 5. SAVE ───────────────────────────────────────────────────────────────────
-csv_path  = os.path.join(OUTPUT_DIR, "minifigs_clean.csv")
-json_path = os.path.join(OUTPUT_DIR, "minifigs_clean.json")
-
-df.to_csv(csv_path, index=False)
-
-# themes column contains lists — to_json handles them correctly with orient="records"
-df.to_json(json_path, orient="records", indent=2, force_ascii=False)
-
-print(f"\nSaved → {csv_path}  ({len(df)} rows, {len(df.columns)} cols)")
-print(f"Saved → {json_path}")
-print(f"Final columns: {list(df.columns)}")
