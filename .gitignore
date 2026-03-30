@@ -1,4 +1,12 @@
 data/*
 eda_plots/*
 data_clean2.py
+submissions/
+output_predictions/
 test_predictions.csv
+catboost_optimized_predictions.csv
+catboost_predictions.csv
+catboost_baseline_predictions.csv
+lightgbm_baseline_predictions.csv
+lightgbm_tuning_predictions.csv
+ensemble_final_predictions.csv
