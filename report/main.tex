@@ -1,0 +1,119 @@
+\documentclass[11pt,a4paper,oneside]{report}
+
+% Encoding & font
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\frenchspacing
+\pdfminorversion=7
+
+\usepackage[british]{babel}
+
+% Page layout
+\usepackage[a4paper,left=20mm,right=20mm,top=25mm,bottom=25mm,includefoot]{geometry}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt plus 1pt minus 1pt}
+\raggedbottom
+
+\usepackage{setspace}
+\setstretch{1.05}
+
+% Graphics & floats
+\usepackage{graphicx}
+\graphicspath{{figures/}{../eda_plots/}}
+\usepackage{float}
+\usepackage{flafter}
+\usepackage{etoolbox}
+
+\makeatletter
+\patchcmd{\tableofcontents}{\@starttoc}{\vspace{-1.0cm}\@starttoc}{}{}
+\renewcommand*\l@chapter[2]{%
+  \ifnum \c@tocdepth >\m@ne
+    \addpenalty{-\@highpenalty}%
+    \vskip 0.2em \@plus\p@ 
+    \setlength\@tempdima{1.5em}%
+    \begingroup
+      \parindent \z@ \rightskip \@pnumwidth
+      \parfillskip -\@pnumwidth
+      \leavevmode \bfseries
+      \advance\leftskip\@tempdima
+      \hskip -\leftskip
+      #1\nobreak\hfil \nobreak\hb@xt@\@pnumwidth{\hss #2}\par
+      \penalty\@highpenalty
+    \endgroup
+  \fi}
+\makeatother
+
+\usepackage[font=small,labelfont=bf]{caption}
+\setlength{\abovecaptionskip}{4pt}
+\setlength{\belowcaptionskip}{2pt}
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\intextsep}{6pt plus 2pt minus 2pt}
+
+% Listings (example ``source code'' blocks)
+\usepackage{xcolor}
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  breakatwhitespace=true,
+  frame=single,
+  framerule=0.4pt,
+  columns=fullflexible,
+  aboveskip=0.75\baselineskip,
+  belowskip=0.75\baselineskip
+}
+\renewcommand{\lstlistingname}{Listing}
+
+\usepackage{cite}
+\usepackage[hyphens]{url}
+\def\UrlBreaks{\do\/\do-\do\.}
+\usepackage[hidelinks]{hyperref}
+
+% Compact chapter headings (numbered)
+\makeatletter
+\newcommand{\mainchapter}[1]{%
+  \par\vspace*{10pt}%
+  \refstepcounter{chapter}%
+  \setcounter{section}{0}%
+  \addcontentsline{toc}{chapter}{\protect\numberline{\thechapter}#1}%
+  {\parindent \z@ \raggedright \normalfont
+    \LARGE\bfseries \thechapter. #1\par\nobreak
+    \vskip 8pt}%
+}
+\makeatother
+
+\newcommand{\npar}{\par \vspace{1.2ex plus 0.3ex minus 0.3ex}\noindent}
+
+\begin{document}
+
+% Avoid duplicate PDF page anchors between unnumbered title and front matter
+\hypersetup{pageanchor=false}
+\input{title}
+\thispagestyle{empty}
+\hypersetup{pageanchor=true}
+
+\pagenumbering{roman}
+\begingroup
+\let\clearpage\relax
+\vspace*{-4cm}
+\setcounter{tocdepth}{1}
+\begin{spacing}{0.9}
+\tableofcontents
+\end{spacing}
+\endgroup
+\clearpage
+
+\pagenumbering{arabic}
+\vspace*{-1.5cm}
+
+\mainchapter{Example chapter}
+\input{chapters/example}
+
+\clearpage
+\addcontentsline{toc}{chapter}{Bibliography}
+\bibliographystyle{ieeetr}
+\bibliography{references}
+
+\end{document}

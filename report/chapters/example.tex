@@ -1,0 +1,48 @@
+\section{Chapter title}
+
+This is an \emph{example chapter}. Use \verb|\mainchapter{Your title}| in \texttt{main.tex} for the numbered chapter heading (what you see as ``1.~\ldots'' in the PDF and table of contents). Inside the chapter file, use \verb|\section| and \verb|\subsection| for structure.
+
+\subsection{Subtitle (section and subsection)}
+
+\texttt{\textbackslash section\{...\}} is a major heading. \texttt{\textbackslash subsection\{...\}} is a subtitle under it. You can add normal paragraphs like this one: write sentences, use \textbf{bold}, \textit{italics}, and \texttt{typewriter} for code or identifiers.
+
+\subsection{Bullet list}
+
+Use an \texttt{itemize} environment for bullet lists:
+
+\begin{itemize}
+\item First item
+\item Second item
+\item Third item (add as many as you need)
+\end{itemize}
+
+\subsection{Figure: importing an image}
+
+Put image files under \texttt{report/figures/} (or extend \texttt{\textbackslash graphicspath} in \texttt{main.tex}). Reference paths without the folder name if that folder is on the graphic path.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.35\textwidth]{KULeuvenLogo.png}
+\caption{Example figure: include an image with \texttt{\textbackslash includegraphics}.}
+\label{fig:example-logo}
+\end{figure}
+
+Figure~\ref{fig:example-logo} shows a small example. Change \texttt{width} to scale the image.
+
+\subsection{Citing a source}
+
+Cite entries from \texttt{references.bib} with \verb|\cite{|\textit{key}\verb|}|. Example: work in machine learning has a long history~\cite{samuel1959some}. Web pages and reports often use a \texttt{@misc} entry~\cite{kuleuven2026home}.
+
+\subsection{Source code listing}
+
+Short code snippets can use the \texttt{lstlisting} environment (configured in \texttt{main.tex}):
+
+\begin{lstlisting}[language=Python, caption={Example Python source.}]
+# Example: load data
+import pandas as pd
+
+df = pd.read_csv("data.csv")
+print(df.head())
+\end{lstlisting}
+
+For inline code, use \verb|\texttt{...}| or \lstinline{print(x)}.
