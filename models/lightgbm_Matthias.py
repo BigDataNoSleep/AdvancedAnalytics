@@ -1,4 +1,4 @@
- %% [markdown]
+# %% [markdown]
 # Exploratory Data Analysis: Transactions 2016-2017
 # This script performs EDA on the transaction dataset.
 import numpy as np

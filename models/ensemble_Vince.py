@@ -1,4 +1,9 @@
-#%%
+# %% [markdown]
+# # Robust Ensemble + OOF-Selected Post-Processing
+# This script combines multiple models (CatBoost, LightGBM, XGBoost) using convex weight optimization 
+# and median blending, then applies automated post-processing search.
+
+# %%
 import os
 import sys
 import itertools
@@ -11,10 +16,17 @@ from scipy.optimize import minimize
 from scipy.stats import spearmanr
 from sklearn.metrics import mean_absolute_error
 
-# Add parent directory for eda_transactions
+# Add parent directory for module imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from eda_transactions import get_customer_model_data
 
+# Select Data Source: Standard vs Advanced Features
+# from eda_transactions import get_customer_model_data; EDA_TYPE = "standard"
+from eda_transactions_advanced import get_advanced_customer_model_data as get_customer_model_data; EDA_TYPE = "advanced"
+from post_processing import (
+    calculate_metrics, 
+    apply_post_processing_method, 
+    run_ensemble_post_processing
+)
 
 # ============================================================
 # CONFIG
@@ -36,18 +48,6 @@ MODEL_FILES = {
 
 SEARCH_MEDIAN_BLEND = True
 
-
-# ============================================================
-# METRICS
-# ============================================================
-def evaluate(y_true, y_pred):
-    mae = mean_absolute_error(y_true, y_pred)
-    spear, _ = spearmanr(y_true, y_pred)
-    if np.isnan(spear):
-        spear = 0.0
-    return mae, spear
-
-
 # ============================================================
 # PATHS
 # ============================================================
@@ -56,7 +56,6 @@ def get_output_dir():
     if base_dir.name == "models":
         return base_dir.parent / "submissions"
     return base_dir / "submissions"
-
 
 # ============================================================
 # FILE HELPERS
@@ -174,15 +173,15 @@ def find_best_ensemble(oof_dict, y_true):
         # Weighted
         weights = optimize_convex_weights(pred_matrix, y_true)
         weighted_pred = weighted_predict(pred_matrix, weights)
-        weighted_mae, weighted_spear = evaluate(y_true, weighted_pred)
+        weighted_metrics = calculate_metrics(y_true, weighted_pred)
 
         rows.append({
             "subset": ",".join(subset),
             "method": "weighted",
-            "weights": repr(dict(zip(subset, [round(w, 6) for w in weights]))),
+            "weights": repr(dict(zip(subset, [round(w, 4) for w in weights]))),
             "alpha_weighted_vs_median": np.nan,
-            "score_mae": weighted_mae,
-            "score_spearman": weighted_spear
+            "score_mae": weighted_metrics['MAE'],
+            "score_spearman": weighted_metrics['Spearman']
         })
 
         candidate = {
@@ -191,8 +190,8 @@ def find_best_ensemble(oof_dict, y_true):
             "weights": weights,
             "alpha": None,
             "score_pred": weighted_pred,
-            "score_mae": weighted_mae,
-            "score_spearman": weighted_spear
+            "score_mae": weighted_metrics['MAE'],
+            "score_spearman": weighted_metrics['Spearman']
         }
 
         if best_result is None or candidate["score_mae"] < best_result["score_mae"]:
@@ -201,15 +200,15 @@ def find_best_ensemble(oof_dict, y_true):
         # Median
         if SEARCH_MEDIAN_BLEND and len(subset) >= 2:
             median_pred = median_predict(pred_matrix)
-            median_mae, median_spear = evaluate(y_true, median_pred)
+            median_metrics = calculate_metrics(y_true, median_pred)
 
             rows.append({
                 "subset": ",".join(subset),
                 "method": "median",
                 "weights": "",
                 "alpha_weighted_vs_median": np.nan,
-                "score_mae": median_mae,
-                "score_spearman": median_spear
+                "score_mae": median_metrics['MAE'],
+                "score_spearman": median_metrics['Spearman']
             })
 
             candidate = {
@@ -218,8 +217,8 @@ def find_best_ensemble(oof_dict, y_true):
                 "weights": None,
                 "alpha": None,
                 "score_pred": median_pred,
-                "score_mae": median_mae,
-                "score_spearman": median_spear
+                "score_mae": median_metrics['MAE'],
+                "score_spearman": median_metrics['Spearman']
             }
 
             if candidate["score_mae"] < best_result["score_mae"]:
@@ -228,26 +227,27 @@ def find_best_ensemble(oof_dict, y_true):
             # Weighted + median
             best_alpha = 1.0
             best_blend_pred = weighted_pred
-            best_blend_mae, best_blend_spear = evaluate(y_true, weighted_pred)
+            best_blend_metrics = calculate_metrics(y_true, weighted_pred)
 
             for alpha in np.linspace(0.0, 1.0, 41):
                 blend_pred = alpha * weighted_pred + (1.0 - alpha) * median_pred
                 blend_pred = np.maximum(blend_pred, 0)
-                blend_mae, blend_spear = evaluate(y_true, blend_pred)
+                blend_mae = mean_absolute_error(y_true, blend_pred)
 
-                if blend_mae < best_blend_mae:
+                if blend_mae < best_blend_metrics['MAE']:
                     best_alpha = alpha
                     best_blend_pred = blend_pred
-                    best_blend_mae = blend_mae
-                    best_blend_spear = blend_spear
+                    best_blend_metrics['MAE'] = blend_mae
+                    # Spearman doesn't necessarily improve with MAE optimization
+                    _, best_blend_metrics['Spearman'] = spearmanr(y_true, blend_pred)
 
             rows.append({
                 "subset": ",".join(subset),
                 "method": "weighted_plus_median",
-                "weights": repr(dict(zip(subset, [round(w, 6) for w in weights]))),
+                "weights": repr(dict(zip(subset, [round(w, 4) for w in weights]))),
                 "alpha_weighted_vs_median": round(best_alpha, 4),
-                "score_mae": best_blend_mae,
-                "score_spearman": best_blend_spear
+                "score_mae": best_blend_metrics['MAE'],
+                "score_spearman": best_blend_metrics['Spearman']
             })
 
             candidate = {
@@ -256,8 +256,8 @@ def find_best_ensemble(oof_dict, y_true):
                 "weights": weights,
                 "alpha": best_alpha,
                 "score_pred": best_blend_pred,
-                "score_mae": best_blend_mae,
-                "score_spearman": best_blend_spear
+                "score_mae": best_blend_metrics['MAE'],
+                "score_spearman": best_blend_metrics['Spearman']
             }
 
             if candidate["score_mae"] < best_result["score_mae"]:
@@ -265,81 +265,6 @@ def find_best_ensemble(oof_dict, y_true):
 
     diagnostics = pd.DataFrame(rows).sort_values("score_mae").reset_index(drop=True)
     return best_result, diagnostics
-
-
-# ============================================================
-# POST-PROCESSING
-# ============================================================
-def force_zero_rate(preds, zero_rate):
-    preds = np.asarray(preds, dtype=float).copy()
-    preds = np.maximum(preds, 0)
-
-    n_zero = int(round(len(preds) * zero_rate))
-    if n_zero <= 0:
-        return preds
-
-    order = np.argsort(preds)
-    preds[order[:n_zero]] = 0.0
-    return preds
-
-
-def snap_to_known_values(preds, known_values):
-    preds = np.asarray(preds, dtype=float)
-    known_values = np.asarray(known_values, dtype=float)
-    known_values = np.sort(np.unique(known_values))
-
-    idx = np.searchsorted(known_values, preds)
-    idx_left = np.clip(idx - 1, 0, len(known_values) - 1)
-    idx_right = np.clip(idx, 0, len(known_values) - 1)
-
-    left_vals = known_values[idx_left]
-    right_vals = known_values[idx_right]
-
-    choose_right = np.abs(preds - right_vals) < np.abs(preds - left_vals)
-    return np.where(choose_right, right_vals, left_vals)
-
-
-def scale_predictions(preds, factor):
-    preds = np.asarray(preds, dtype=float)
-    return np.maximum(preds * factor, 0)
-
-
-def apply_postprocess(preds, method_name, train_zero_rate, known_values):
-    preds = np.asarray(preds, dtype=float).copy()
-    preds = np.maximum(preds, 0)
-
-    if method_name == "raw":
-        return preds
-
-    if method_name == "force_zero_rate":
-        return force_zero_rate(preds, train_zero_rate)
-
-    if method_name == "snap_only":
-        out = snap_to_known_values(preds, known_values)
-        out[out <= 0.01] = 0.0
-        return out
-
-    if method_name == "zero_then_snap":
-        out = force_zero_rate(preds, train_zero_rate)
-        out = snap_to_known_values(out, known_values)
-        out[out <= 0.01] = 0.0
-        return out
-
-    if method_name.startswith("zeroq_"):
-        q = float(method_name.split("_")[1])
-        return force_zero_rate(preds, q)
-
-    if method_name.startswith("scale_"):
-        factor = float(method_name.split("_")[1])
-        return scale_predictions(preds, factor)
-
-    if method_name.startswith("zeroqscale_"):
-        _, q, factor = method_name.split("_")
-        out = force_zero_rate(preds, float(q))
-        out = scale_predictions(out, float(factor))
-        return out
-
-    raise ValueError(f"Unknown postprocess method: {method_name}")
 
 
 def search_postprocess_on_oof(oof_pred, y_true, train_zero_rate, known_values):
@@ -364,239 +289,146 @@ def search_postprocess_on_oof(oof_pred, y_true, train_zero_rate, known_values):
     best_mae = np.inf
 
     for method in methods:
-        pp = apply_postprocess(oof_pred, method, train_zero_rate, known_values)
-        mae, spear = evaluate(y_true, pp)
+        pp = apply_post_processing_method(oof_pred, method, train_zero_rate, known_values)
+        metrics = calculate_metrics(y_true, pp)
 
         rows.append({
             "postprocess": method,
-            "score_mae": mae,
-            "score_spearman": spear,
+            "score_mae": metrics['MAE'],
+            "score_spearman": metrics['Spearman'],
             "zero_share": float((pp == 0).mean()),
             "positive_mean": float(pp[pp > 0].mean()) if np.any(pp > 0) else 0.0
         })
 
-        if mae < best_mae:
-            best_mae = mae
+        if metrics['MAE'] < best_mae:
+            best_mae = metrics['MAE']
             best_method = method
             best_pred = pp
 
     diagnostics = pd.DataFrame(rows).sort_values("score_mae").reset_index(drop=True)
     return best_method, best_pred, best_mae, diagnostics
 
+# %% [markdown]
+# ## 1. Config & Data Loading
 
-# ============================================================
-# PLOTTING
-# ============================================================
-def plot_distribution_pair(train_target, pred_before, pred_after, output_dir):
-    train_target = pd.Series(train_target)
-    pred_before = pd.Series(pred_before)
-    pred_after = pd.Series(pred_after)
+output_dir = get_output_dir()
+os.makedirs(output_dir, exist_ok=True)
 
-    train_pos = train_target[train_target > 0]
-    before_pos = pred_before[pred_before > 0]
-    after_pos = pred_after[pred_after > 0]
+print("Loading targets and model data...")
+X_train, X_val, X_test, y_train, y_val, y_test, test_unlabelled = get_customer_model_data()
 
-    plt.figure(figsize=(12, 6))
-    plt.hist(train_pos, bins=60, density=True, alpha=0.45, edgecolor='black', label='Train target (>0)')
-    plt.hist(before_pos, bins=60, density=True, alpha=0.45, edgecolor='black', label='Original ensemble (>0)')
-    plt.title('Original distributions (positive only)')
-    plt.xlabel('Revenue')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    path1 = output_dir / 'dist_original_positive.png'
-    plt.savefig(path1, dpi=150)
-    plt.close()
+y_full = pd.concat([y_train, y_val]).reset_index(drop=True)
+train_zero_rate = float((y_full == 0).mean())
+known_values = pd.concat([y_train, y_val]).to_numpy(dtype=float)
 
-    plt.figure(figsize=(12, 6))
-    plt.hist(train_pos, bins=60, density=True, alpha=0.45, edgecolor='black', label='Train target (>0)')
-    plt.hist(after_pos, bins=60, density=True, alpha=0.45, edgecolor='black', label='Adjusted predictions (>0)')
-    plt.title('Adjusted distributions (positive only)')
-    plt.xlabel('Revenue')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    path2 = output_dir / 'dist_adjusted_positive.png'
-    plt.savefig(path2, dpi=150)
-    plt.close()
+print(f"OOF target length:   {len(y_full)}")
+print(f"Competition length:  {len(test_unlabelled)}")
+print(f"Train zero rate:     {train_zero_rate:.4f} ({train_zero_rate*100:.2f}%)")
 
-    plt.figure(figsize=(12, 6))
-    if len(train_pos) > 0:
-        plt.hist(np.log1p(train_pos), bins=60, density=True, alpha=0.40, edgecolor='black', label='Train target log1p')
-    if len(before_pos) > 0:
-        plt.hist(np.log1p(before_pos), bins=60, density=True, alpha=0.40, edgecolor='black', label='Original ensemble log1p')
-    if len(after_pos) > 0:
-        plt.hist(np.log1p(after_pos), bins=60, density=True, alpha=0.40, edgecolor='black', label='Adjusted predictions log1p')
+# %% [markdown]
+# ## 2. Load Predictions (OOF & Competition)
 
-    plt.title('Positive revenue distributions in log1p space')
-    plt.xlabel('log1p(Revenue)')
-    plt.ylabel('Density')
-    plt.legend()
-    plt.tight_layout()
-    path3 = output_dir / 'dist_log1p_before_after_train.png'
-    plt.savefig(path3, dpi=150)
-    plt.close()
+print("\nLoading OOF predictions...")
+oof_dict = {}
+available_models = []
 
-    return path1, path2, path3
+for model_name, files in MODEL_FILES.items():
+    oof_path = output_dir / files["oof"]
+    if oof_path.exists():
+        preds = load_single_oof(oof_path)
+        if len(preds) != len(y_full):
+            raise ValueError(f"Length mismatch for {model_name} OOF")
+        oof_dict[model_name] = preds
+        available_models.append(model_name)
+    else:
+        print(f"Skipping {model_name}: missing {oof_path.name}")
 
+if not available_models:
+    raise FileNotFoundError("No OOF files found.")
 
-# ============================================================
-# MAIN
-# ============================================================
-def main():
-    print("=" * 72)
-    print("ROBUST ENSEMBLE + OOF-SELECTED POSTPROCESS")
-    print("=" * 72)
+print(f"Integrated models: {available_models}")
 
-    output_dir = get_output_dir()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Using submissions directory: {output_dir}")
+# %% [markdown]
+# ## 3. Ensemble Optimization
 
-    print("\nLoading targets from eda_transactions.py...")
-    X_train, X_val, X_test, y_train, y_val, y_test, test_unlabelled = get_customer_model_data()
+print("\nSearching best ensemble on OOF...")
+best_ensemble_result, ensemble_diagnostics = find_best_ensemble(oof_dict, y_full.to_numpy())
 
-    y_full = pd.concat([y_train, y_val]).reset_index(drop=True)
-    train_zero_rate = float((y_full == 0).mean())
-    known_values = pd.concat([y_train, y_val]).to_numpy(dtype=float)
+print("\nBest OOF ensemble:")
+print(f"  subset:    {best_ensemble_result['subset']}")
+print(f"  method:    {best_ensemble_result['method']}")
+print(f"  score_mae: {best_ensemble_result['score_mae']:.6f}")
 
-    print(f"OOF target length:   {len(y_full)}")
-    print(f"Competition length:  {len(test_unlabelled)}")
-    print(f"Train zero rate:     {train_zero_rate:.4f} ({train_zero_rate*100:.2f}%)")
+print("\nTop 10 ensemble candidates:")
+print(ensemble_diagnostics.head(10).to_string(index=False))
 
-    # --------------------------------------------------------
-    # Load OOF predictions
-    # --------------------------------------------------------
-    print("\nLoading OOF predictions...")
-    oof_dict = {}
-    available_models = []
+# %% [markdown]
+# ## 4. Post-Processing Optimization
 
-    for model_name, files in MODEL_FILES.items():
-        oof_path = output_dir / files["oof"]
-        if oof_path.exists():
-            preds = load_single_oof(oof_path)
-            if len(preds) != len(y_full):
-                raise ValueError(
-                    f"Length mismatch for {model_name} OOF: {len(preds)} vs {len(y_full)}"
-                )
-            oof_dict[model_name] = preds
-            available_models.append(model_name)
-        else:
-            print(f"Skipping {model_name}: missing {oof_path.name}")
+print("\nSearching best post-processing for ensemble...")
+oof_best_raw = best_ensemble_result["score_pred"]
 
-    if not available_models:
-        raise FileNotFoundError("No OOF files found.")
+best_pp_name, best_oof_pp, best_pp_mae, pp_diag = search_postprocess_on_oof(
+    oof_pred=oof_best_raw,
+    y_true=y_full.to_numpy(),
+    train_zero_rate=train_zero_rate,
+    known_values=known_values
+)
 
-    print(f"Available models: {available_models}")
+print("\nBest OOF postprocess:")
+print(f"  method: {best_pp_name}")
+print(f"  mae:    {best_pp_mae:.6f}")
 
-    # --------------------------------------------------------
-    # Search best ensemble on OOF
-    # --------------------------------------------------------
-    print("\nSearching best ensemble on OOF...")
-    best_result, diagnostics = find_best_ensemble(oof_dict, y_full.to_numpy())
+print("\nTop 10 postprocess candidates:")
+print(pp_diag.head(10)[["postprocess", "score_mae", "zero_share"]].to_string(index=False))
 
-    print("\nBest OOF ensemble:")
-    print(f"  subset:   {best_result['subset']}")
-    print(f"  method:   {best_result['method']}")
-    print(f"  score_mae:{best_result['score_mae']:.6f}")
-    print(f"  spear:    {best_result['score_spearman']:.6f}")
+# %% [markdown]
+# ## 5. Final Assembly & Submission
 
-    oof_best_raw = best_result["score_pred"]
-    raw_mae, raw_spear = evaluate(y_full, oof_best_raw)
+print("\nLoading competition predictions for chosen subset...")
+comp_frames = []
+for model_name in best_ensemble_result["subset"]:
+    comp_path = output_dir / MODEL_FILES[model_name]["comp"]
+    comp_frames.append(load_single_prediction_file(comp_path, model_name))
 
-    print("\nRaw OOF diagnostics:")
-    print(f"  OOF MAE     : {raw_mae:.6f}")
-    print(f"  OOF Spearman: {raw_spear:.6f}")
+comp_merged = merge_prediction_frames(comp_frames)
+comp_final_raw = apply_best_ensemble(best_ensemble_result, comp_merged)
 
-    # --------------------------------------------------------
-    # Search best post-processing on OOF
-    # --------------------------------------------------------
-    print("\nSearching best post-processing on OOF...")
-    best_pp_name, best_oof_pp, best_pp_mae, pp_diag = search_postprocess_on_oof(
-        oof_pred=oof_best_raw,
-        y_true=y_full.to_numpy(),
-        train_zero_rate=train_zero_rate,
-        known_values=known_values
-    )
+# Apply best OOF postprocess
+comp_final = apply_post_processing_method(
+    preds=comp_final_raw,
+    method_name=best_pp_name,
+    train_zero_rate=train_zero_rate,
+    known_values=known_values
+)
 
-    print("\nBest OOF postprocess:")
-    print(f"  method: {best_pp_name}")
-    print(f"  mae:    {best_pp_mae:.6f}")
+final_submission = pd.DataFrame({
+    "cust_id": comp_merged["cust_id"],
+    "prediction": comp_final
+})
 
-    # --------------------------------------------------------
-    # Load competition predictions for chosen subset
-    # --------------------------------------------------------
-    print("\nLoading competition predictions for chosen subset...")
-    comp_frames = []
-    for model_name in best_result["subset"]:
-        comp_path = output_dir / MODEL_FILES[model_name]["comp"]
-        if not comp_path.exists():
-            raise FileNotFoundError(f"Missing competition file: {comp_path}")
-        comp_frames.append(load_single_prediction_file(comp_path, model_name))
+final_path = output_dir / "ensemble_final_predictions.csv"
+final_submission.to_csv(final_path, index=False)
+print(f"\nFinal ensemble predictions saved to: {final_path}")
 
-    comp_merged = merge_prediction_frames(comp_frames)
-    comp_final_raw = apply_best_ensemble(best_result, comp_merged)
+# %% [markdown]
+# ## 6. Diagnostics (The "After-Processing")
 
-    # Apply best OOF postprocess to competition predictions
-    comp_final = apply_postprocess(
-        preds=comp_final_raw,
-        method_name=best_pp_name,
-        train_zero_rate=train_zero_rate,
-        known_values=known_values
-    )
+# Convert weights to dictionary for visualization
+weights_dict = None
+if best_ensemble_result["weights"] is not None:
+    weights_dict = dict(zip(best_ensemble_result["subset"], best_ensemble_result["weights"]))
 
-    # --------------------------------------------------------
-    # Save outputs
-    # --------------------------------------------------------
-    final_submission = pd.DataFrame({
-        "cust_id": comp_merged["cust_id"],
-        "prediction": comp_final
-    })
+# Run Enhanced Ensemble Post-Processing
+run_ensemble_post_processing(
+    y_true=y_full.to_numpy(),
+    oof_dict=oof_dict,
+    ensemble_pred=best_oof_pp, # Using the post-processed OOF for diagnostics
+    weights=weights_dict,
+    postprocess_method=best_pp_name,
+    eda_used=EDA_TYPE
+)
 
-    final_path = output_dir / "ensemble_final_predictions.csv"
-    final_submission.to_csv(final_path, index=False)
-
-    diag_path = output_dir / "ensemble_final_diagnostics.csv"
-    diagnostics.to_csv(diag_path, index=False)
-
-    pp_diag_path = output_dir / "ensemble_final_postprocess_diagnostics.csv"
-    pp_diag.to_csv(pp_diag_path, index=False)
-
-    print("\nSaved:")
-    print(f"  {final_path}")
-    print(f"  {diag_path}")
-    print(f"  {pp_diag_path}")
-
-    print("\nFinal prediction summary:")
-    print(final_submission["prediction"].describe())
-    print(f"Zero share: {(final_submission['prediction'] == 0).mean():.4f}")
-
-    print("\n=== ZERO PERCENTAGE SUMMARY ===")
-    print(f"Train target:         {train_zero_rate*100:.2f}% zeros")
-    print(f"Raw predictions:      {(comp_final_raw == 0).mean()*100:.2f}% zeros")
-    print(f"Adjusted predictions: {(comp_final == 0).mean()*100:.2f}% zeros")
-
-    path1, path2, path3 = plot_distribution_pair(
-        train_target=y_full.values,
-        pred_before=comp_final_raw,
-        pred_after=comp_final,
-        output_dir=output_dir
-    )
-
-    print("\nSaved plots:")
-    print(f"  {path1}")
-    print(f"  {path2}")
-    print(f"  {path3}")
-
-    print("\nTop 10 ensemble candidates:")
-    print(diagnostics.head(10).to_string(index=False))
-
-    print("\nTop 10 postprocess candidates:")
-    print(pp_diag.head(10).to_string(index=False))
-
-    print("\nDone.")
-
-
-if __name__ == "__main__":
-    main()
-
-# %%
+print("\n=== ZERO PERCENTAGE SUMMARY ===")
+print(f"Train target:         {train_zero_rate*100:.2f}% zeros")
+print(f"Final predictions:    {(comp_final == 0).mean()*100:.2f}% zeros")

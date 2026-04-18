@@ -25,9 +25,12 @@ from sklearn.model_selection import StratifiedKFold
 warnings.filterwarnings('ignore')
 sns.set_theme(style="whitegrid")
 
-# Add parent directory for eda_transactions
+# Add parent directory for eda_transactions and post_processing
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from eda_transactions import get_customer_model_data
+# Select Data Source: Standard vs Advanced Features
+# from eda_transactions import get_customer_model_data; EDA_TYPE = "standard"
+from eda_transactions_advanced import get_advanced_customer_model_data as get_customer_model_data; EDA_TYPE = "advanced"
+from post_processing import run_full_post_processing
 
 # ============================================================
 # CONSTANTS & EXPERIMENT FLAGS
@@ -204,7 +207,8 @@ def train_catboost_baseline(X_full, y_full, X_test, test_unlabelled):
     return {
         'val_preds': val_preds,
         'test_preds': avg_test_preds,
-        'comp_preds': avg_comp_preds
+        'comp_preds': avg_comp_preds,
+        'last_model': model # Return the last trained model for post-processing
     }
 
 # %%
@@ -261,5 +265,18 @@ if __name__ == "__main__":
     test_predictions.to_csv(output_path, index_label='cust_id')
     print(f"\nFinal baseline predictions saved to `{output_path}`.")
     print(f"OOF predictions saved to `{oof_path}`.")
+
+# %%
+# ============================================================
+# 4. POST-PROCESSING
+# ============================================================
+run_full_post_processing(
+    model=results['last_model'],
+    X_train=X_full_train,
+    y_true=y_full_train,
+    y_pred=results['val_preds'],
+    model_name="CatBoost",
+    eda_used=EDA_TYPE
+)
 
 # %%
