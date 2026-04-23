@@ -20,8 +20,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # from eda_transactions import get_customer_model_data; EDA_TYPE = "standard"
 from eda_transactions_advanced import get_advanced_customer_model_data; EDA_TYPE = "advanced"
 from post_processing import (
-    calculate_metrics, 
-    run_full_post_processing
+    fit_apply_post_processing,
+    evaluate_log_and_save
 )
 
 # Set plotting style
@@ -87,62 +87,38 @@ test_preds = np.maximum(0, test_preds)
 print(f"\nOOF Baseline MAE: {mean_absolute_error(y, oof_preds):.4f}")
 
 # %% [markdown]
-# ## 3. Manual Filters (Floor & Recency)
-# Implementing the "Human-Coded" rules for aggressive inactivity zeroing.
+# ## 3. Post-Processing Pipeline
+# Applying automated data-driven scaling and mapping functions.
 
-def apply_manual_filters(preds, feature_df):
-    """
-    Applies the floor threshold and the 400/500-day recency logic.
-    """
-    p = preds.copy()
-    
-    # 1. Floor Filter
-    p[p < 5.0] = 0
-    
-    # 2. Recency Filter
-    if 'recency_days' in feature_df.columns:
-        # Penalize customers inactive for over 400 days
-        mask_400 = (feature_df['recency_days'] > 400) & (feature_df['recency_days'] <= 500)
-        p[mask_400] *= 0.2
-        
-        # Zero out customers inactive for over 500 days
-        mask_500 = (feature_df['recency_days'] > 500)
-        p[mask_500] = 0
-        
-    return p
+POST_PROCESS_METHOD = "recency_only_cv"
 
-# Apply to OOF and Test
-oof_final = apply_manual_filters(oof_preds, X)
-test_final = apply_manual_filters(test_preds, test_unlabelled)
-
-print(f"Final OOF MAE (after filters): {mean_absolute_error(y, oof_final):.4f}")
-
-# %% [markdown]
-# ## 4. Interactive Diagnostics & Submission
-
-# 1. Run Standard Post-Processing Diagnostics
-run_full_post_processing(
-    model=model,
-    X_train=X,
-    y_true=y,
-    y_pred=oof_final,
-    model_name="LightGBM_Advanced",
-    eda_used=EDA_TYPE
+print(f"\nApplying {POST_PROCESS_METHOD} post-processing...")
+oof_final, test_final = fit_apply_post_processing(
+    oof_preds=oof_preds,
+    test_preds=test_preds,
+    y_true=y.values,
+    method_name=POST_PROCESS_METHOD,
+    known_values=y.values,
+    recency_train=X['recency_days'],
+    recency_test=test_unlabelled['recency_days']
 )
 
-# 2. Prepare Submission
-submission = pd.DataFrame({
-    'cust_id': test_ids,
-    'revenue': test_final
-})
+print(f"Final OOF MAE (after post-processing): {mean_absolute_error(y, oof_final):.4f}")
 
-# Save to standard submissions folder
-output_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'submissions', 'lightgbm_advanced_predictions.csv'))
-os.makedirs(os.path.dirname(output_path), exist_ok=True)
-submission.to_csv(output_path, index=False)
-print(f"\nFinal predictions saved to: {output_path}")
+# %% [markdown]
+# ## 4. Interactive Diagnostics, Logging & Final Submission
 
-# 3. Final Verification of Zero Rates
+# Unified Orchestrator covers plotting, logging to CSV, and standardized CSV submission saving
+metrics = evaluate_log_and_save(
+    oof_preds=oof_final,
+    test_preds=test_final,
+    y_true=y,
+    test_ids=test_ids,
+    model_name="LightGBM_Advanced",
+    eda_used=EDA_TYPE,
+    postprocess_method=POST_PROCESS_METHOD
+)
+
 print("\n=== ZERO CONCENTRATION (OOF) ===")
 print(f"Actual Zeros:   {(y == 0).mean()*100:.2f}%")
 print(f"Predicted Zeros: {(oof_final == 0).mean()*100:.2f}%")

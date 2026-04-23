@@ -30,7 +30,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # Select Data Source: Standard vs Advanced Features
 # from eda_transactions import get_customer_model_data; EDA_TYPE = "standard"
 from eda_transactions_advanced import get_advanced_customer_model_data as get_customer_model_data; EDA_TYPE = "advanced"
-from post_processing import run_full_post_processing
+from post_processing import fit_apply_post_processing, evaluate_log_and_save
 
 # ============================================================
 # CONSTANTS & EXPERIMENT FLAGS
@@ -231,52 +231,35 @@ if __name__ == "__main__":
     # Train
     results = train_catboost_baseline(X_full_train, y_full_train, X_test, test_unlabelled)
     
-    # Robust pathing: find root directory
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    if os.path.basename(base_dir) == 'models':
-        output_dir = os.path.join(os.path.dirname(base_dir), 'submissions')
-    else:
-        output_dir = os.path.join(base_dir, 'submissions')
-    
-    os.makedirs(output_dir, exist_ok=True)
-    
-    oof_df = pd.DataFrame({'prediction': results['val_preds']}, index=X_full_train.index)
-    oof_path = os.path.join(output_dir, 'catboost_oof.csv')
-    oof_df.to_csv(oof_path, index=False)
-
     # Holdout Verification
     test_mae, test_spearman = evaluate(y_test, results['test_preds'])
     print(f"\nLocal Holdout Test MAE: {test_mae:.4f}")
     
-    # Save Predictions
-    test_predictions = pd.DataFrame({
-        'prediction': results['comp_preds']
-    }, index=test_unlabelled.index)
+    # ============================================================
+    # 4. POST-PROCESSING & LOGGING
+    # ============================================================
+    POST_PROCESS_METHOD = "best"
     
-    # Recover original IDs
-    try:
-        _test_baseline = pd.read_csv("../test_predictions.csv")
-        if len(_test_baseline) == len(test_predictions):
-            test_predictions.index = sorted(_test_baseline['cust_id'].unique())
-    except:
-        pass
-
-    output_path = os.path.join(output_dir, 'catboost_baseline_predictions.csv')
-    test_predictions.to_csv(output_path, index_label='cust_id')
-    print(f"\nFinal baseline predictions saved to `{output_path}`.")
-    print(f"OOF predictions saved to `{oof_path}`.")
-
-# %%
-# ============================================================
-# 4. POST-PROCESSING
-# ============================================================
-run_full_post_processing(
-    model=results['last_model'],
-    X_train=X_full_train,
-    y_true=y_full_train,
-    y_pred=results['val_preds'],
-    model_name="CatBoost",
-    eda_used=EDA_TYPE
-)
+    print(f"\nApplying {POST_PROCESS_METHOD} post-processing...")
+    print(f"\nApplying {POST_PROCESS_METHOD} post-processing...")
+    oof_final, test_final = fit_apply_post_processing(
+        oof_preds=results['val_preds'],
+        test_preds=results['comp_preds'],
+        y_true=y_full_train.values,
+        method_name=POST_PROCESS_METHOD,
+        known_values=y_full_train.values,
+        recency_train=X_full_train['recency_days'],
+        recency_test=test_unlabelled['recency_days']
+    )
+    
+    metrics = evaluate_log_and_save(
+        oof_preds=oof_final,
+        test_preds=test_final,
+        y_true=y_full_train,
+        test_ids=test_unlabelled.index,
+        model_name="CatBoost",
+        eda_used=EDA_TYPE,
+        postprocess_method=POST_PROCESS_METHOD
+    )
 
 # %%

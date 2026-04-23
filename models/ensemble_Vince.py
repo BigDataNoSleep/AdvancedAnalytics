@@ -24,8 +24,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from eda_transactions_advanced import get_advanced_customer_model_data as get_customer_model_data; EDA_TYPE = "advanced"
 from post_processing import (
     calculate_metrics, 
-    apply_post_processing_method, 
-    run_ensemble_post_processing
+    fit_apply_post_processing,
+    evaluate_log_and_save
 )
 
 # ============================================================
@@ -267,8 +267,11 @@ def find_best_ensemble(oof_dict, y_true):
     return best_result, diagnostics
 
 
-def search_postprocess_on_oof(oof_pred, y_true, train_zero_rate, known_values):
-    methods = ["raw", "force_zero_rate", "snap_only", "zero_then_snap"]
+def search_postprocess_on_oof(oof_pred, y_true, train_zero_rate, known_values, recency_train=None, recency_test=None):
+    methods = ["raw", "force_zero_rate", "snap_only", "zero_then_snap", "piecewise_scale", "quantile_map", "strong_combo", "ultra_combo"]
+    
+    if recency_train is not None:
+        methods.append("recency_only")
 
     low = max(0.45, train_zero_rate - 0.10)
     high = min(0.80, train_zero_rate + 0.10)
@@ -289,7 +292,7 @@ def search_postprocess_on_oof(oof_pred, y_true, train_zero_rate, known_values):
     best_mae = np.inf
 
     for method in methods:
-        pp = apply_post_processing_method(oof_pred, method, train_zero_rate, known_values)
+        pp, _ = fit_apply_post_processing(oof_pred, oof_pred, y_true, method, train_zero_rate, known_values, recency_train, recency_train)
         metrics = calculate_metrics(y_true, pp)
 
         rows.append({
@@ -318,6 +321,8 @@ print("Loading targets and model data...")
 X_train, X_val, X_test, y_train, y_val, y_test, test_unlabelled = get_customer_model_data()
 
 y_full = pd.concat([y_train, y_val]).reset_index(drop=True)
+X_full = pd.concat([X_train, X_val]).reset_index(drop=True)
+
 train_zero_rate = float((y_full == 0).mean())
 known_values = pd.concat([y_train, y_val]).to_numpy(dtype=float)
 
@@ -372,7 +377,9 @@ best_pp_name, best_oof_pp, best_pp_mae, pp_diag = search_postprocess_on_oof(
     oof_pred=oof_best_raw,
     y_true=y_full.to_numpy(),
     train_zero_rate=train_zero_rate,
-    known_values=known_values
+    known_values=known_values,
+    recency_train=X_full['recency_days'],
+    recency_test=test_unlabelled['recency_days']
 )
 
 print("\nBest OOF postprocess:")
@@ -394,22 +401,18 @@ for model_name in best_ensemble_result["subset"]:
 comp_merged = merge_prediction_frames(comp_frames)
 comp_final_raw = apply_best_ensemble(best_ensemble_result, comp_merged)
 
-# Apply best OOF postprocess
-comp_final = apply_post_processing_method(
-    preds=comp_final_raw,
+# Apply best OOF postprocess identically across OOF and Test
+comp_final = np.maximum(comp_final_raw, 0)
+oof_final, comp_final = fit_apply_post_processing(
+    oof_preds=oof_best_raw,
+    test_preds=comp_final,
+    y_true=y_full.to_numpy(),
     method_name=best_pp_name,
     train_zero_rate=train_zero_rate,
-    known_values=known_values
+    known_values=known_values,
+    recency_train=X_full['recency_days'],
+    recency_test=test_unlabelled['recency_days']
 )
-
-final_submission = pd.DataFrame({
-    "cust_id": comp_merged["cust_id"],
-    "prediction": comp_final
-})
-
-final_path = output_dir / "ensemble_final_predictions.csv"
-final_submission.to_csv(final_path, index=False)
-print(f"\nFinal ensemble predictions saved to: {final_path}")
 
 # %% [markdown]
 # ## 6. Diagnostics (The "After-Processing")
@@ -419,14 +422,14 @@ weights_dict = None
 if best_ensemble_result["weights"] is not None:
     weights_dict = dict(zip(best_ensemble_result["subset"], best_ensemble_result["weights"]))
 
-# Run Enhanced Ensemble Post-Processing
-run_ensemble_post_processing(
-    y_true=y_full.to_numpy(),
-    oof_dict=oof_dict,
-    ensemble_pred=best_oof_pp, # Using the post-processed OOF for diagnostics
-    weights=weights_dict,
-    postprocess_method=best_pp_name,
-    eda_used=EDA_TYPE
+metrics = evaluate_log_and_save(
+    oof_preds=oof_final,
+    test_preds=comp_final,
+    y_true=y_full,
+    test_ids=comp_merged["cust_id"],
+    model_name="Final_Ensemble",
+    eda_used=EDA_TYPE,
+    postprocess_method=best_pp_name
 )
 
 print("\n=== ZERO PERCENTAGE SUMMARY ===")
