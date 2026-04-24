@@ -12,7 +12,20 @@ def build_advanced_customer_features(df_input):
     df_local = df_input.copy()
     df_local['prod_size'] = pd.to_numeric(df_local['prod_size'], errors='coerce')
     
-    # Size Progression
+    # --- Lifecycle & Velocity ---
+    df_local = df_local.sort_values(['cust_id', 'order_date'])
+    
+    # Size Velocity (Growth rate over time)
+    size_ends = df_local.groupby('cust_id')['prod_size'].agg(['first', 'last']).reset_index()
+    size_velocity = size_ends.merge(customer_features[['cust_id', 'customer_lifetime_days']], on='cust_id', how='left')
+    size_velocity['size_velocity'] = (size_velocity['last'] - size_velocity['first']) / (size_velocity['customer_lifetime_days'] + 1)
+    
+    customer_features = customer_features.merge(size_velocity[['cust_id', 'size_velocity']], on='cust_id', how='left')
+    
+    # Recency/Tenure Ratio
+    customer_features['recency_tenure_ratio'] = customer_features['recency_days'] / (customer_features['customer_lifetime_days'] + 1)
+
+    # --- Size Progression (Original Advanced) ---
     size_stats = df_local.groupby('cust_id')['prod_size'].agg(['min', 'max', 'nunique']).reset_index()
     size_stats['size_growth'] = size_stats['max'] - size_stats['min']
     
@@ -21,7 +34,7 @@ def build_advanced_customer_features(df_input):
         on='cust_id', how='left'
     )
 
-    # Seasonal Pulse
+    # --- Seasonal Pulse (Original Advanced) ---
     df_local['month'] = df_local['order_date'].dt.month
     seasonal_stats = df_local.groupby('cust_id')['month'].agg(['std', 'nunique']).reset_index()
     
@@ -30,14 +43,44 @@ def build_advanced_customer_features(df_input):
         on='cust_id', how='left'
     )
 
-    # Size Stability Ratio
+    # --- Size Stability Ratio (Original Advanced) ---
     customer_features['size_stability_ratio'] = (
         customer_features['unique_sizes'] / (customer_features['n_products'] + 1)
     )
 
+    # --- Price Psychology ---
+    df_local['is_full_price'] = (df_local['sale_discount_applied'] == 0).astype(int)
+    full_price_stats = df_local.groupby('cust_id')['is_full_price'].mean().rename('full_price_affinity').reset_index()
+    customer_features = customer_features.merge(full_price_stats, on='cust_id', how='left')
+    
+    # Average Unit Price (AUP)
+    customer_features['avg_unit_price'] = customer_features['total_spent'] / (customer_features['n_products'] + 1e-9)
+
+    # --- Loyalty & Momentum ---
+    # Brand Stickiness
+    df_local['prev_brand'] = df_local.groupby('cust_id')['prod_brand'].shift(1)
+    df_local['is_same_brand'] = (df_local['prod_brand'] == df_local['prev_brand']).astype(float)
+    stickiness = df_local[df_local['prev_brand'].notna()].groupby('cust_id')['is_same_brand'].mean().rename('brand_stickiness').reset_index()
+    customer_features = customer_features.merge(stickiness, on='cust_id', how='left')
+    
+    # Frequency Deceleration
+    max_date = df_local['order_date'].max()
+    cutoff_recent = max_date - pd.Timedelta(days=180)
+    cutoff_prev = max_date - pd.Timedelta(days=360)
+    
+    recent_orders = df_local[df_local['order_date'] >= cutoff_recent].groupby('cust_id')['order_date'].nunique()
+    prev_orders = df_local[(df_local['order_date'] >= cutoff_prev) & (df_local['order_date'] < cutoff_recent)].groupby('cust_id')['order_date'].nunique()
+    
+    deceleration = (recent_orders / (prev_orders + 1)).rename('frequency_deceleration').reset_index()
+    customer_features = customer_features.merge(deceleration, on='cust_id', how='left')
+
     # Fill NaNs from new features
-    numeric_cols = ['size_growth', 'unique_sizes', 'month_std', 'unique_months', 'size_stability_ratio']
-    customer_features[numeric_cols] = customer_features[numeric_cols].fillna(0)
+    adv_cols = [
+        'size_growth', 'unique_sizes', 'month_std', 'unique_months', 'size_stability_ratio',
+        'size_velocity', 'recency_tenure_ratio', 'full_price_affinity', 'avg_unit_price',
+        'brand_stickiness', 'frequency_deceleration'
+    ]
+    customer_features[adv_cols] = customer_features[adv_cols].fillna(0)
 
     return customer_features
 

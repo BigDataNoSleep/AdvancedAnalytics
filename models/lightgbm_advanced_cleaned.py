@@ -32,9 +32,9 @@ sns.set_theme(style="whitegrid")
 
 X_train, X_val, X_test, y_train, y_val, y_test, test_unlabelled = get_advanced_customer_model_data()
 
-# Combine for cross-validation
-X = pd.concat([X_train, X_val])
-y = pd.concat([y_train, y_val])
+# Combine for cross-validation (Using 100% of labeled data)
+X = pd.concat([X_train, X_val, X_test])
+y = pd.concat([y_train, y_val, y_test])
 
 # Note: test_ids are the index of test_unlabelled (cust_id)
 test_ids = test_unlabelled.index
@@ -49,14 +49,16 @@ print(f"Test rows:  {len(X_test)}")
 params = {
     'objective': 'regression_l1',
     'boosting_type': 'goss',
-    'learning_rate': 0.005,
+    'learning_rate': 0.001,      # Lower learning rate for better stability
     'num_leaves': 70,           # Smaller trees = less overfitting
     'min_child_samples': 200,    # Forces the model to only learn from large groups
     'feature_fraction': 0.6,     # Only look at 60% of features at a time
     'lambda_l1': 15.0,           # High penalty for high guesses
     'seed': 42,
     'verbosity': -1,
-    'device': 'cpu' # Ensure compatibility
+    'n_jobs': -1,                # Use all CPU cores
+    'force_col_wise': True,      # Speed up on Mac
+    'device': 'cpu',             # Change to 'gpu' only if LightGBM is compiled for it
 }
 
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -72,9 +74,9 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(X, y)):
     dval = lgb.Dataset(X_f_val, label=y_f_val, reference=dtrain)
     
     model = lgb.train(
-        params, dtrain, num_boost_round=5000,
+        params, dtrain, num_boost_round=5000, # Increased rounds with lower LR
         valid_sets=[dval],
-        callbacks=[lgb.early_stopping(stopping_rounds=150), lgb.log_evaluation(500)]
+        callbacks=[lgb.early_stopping(stopping_rounds=300), lgb.log_evaluation(1000)]
     )
     
     oof_preds[val_idx] = model.predict(X_f_val)
@@ -90,15 +92,15 @@ print(f"\nOOF Baseline MAE: {mean_absolute_error(y, oof_preds):.4f}")
 # ## 3. Post-Processing Pipeline
 # Applying automated data-driven scaling and mapping functions.
 
-POST_PROCESS_METHOD = "recency_only_cv"
+POST_PROCESS_METHOD = "best"
 
 print(f"\nApplying {POST_PROCESS_METHOD} post-processing...")
 oof_final, test_final = fit_apply_post_processing(
     oof_preds=oof_preds,
     test_preds=test_preds,
-    y_true=y.values,
-    method_name=POST_PROCESS_METHOD,
-    known_values=y.values,
+    y_true=y,
+    method=POST_PROCESS_METHOD,
+    known_values=y,
     recency_train=X['recency_days'],
     recency_test=test_unlabelled['recency_days']
 )
@@ -110,13 +112,13 @@ print(f"Final OOF MAE (after post-processing): {mean_absolute_error(y, oof_final
 
 # Unified Orchestrator covers plotting, logging to CSV, and standardized CSV submission saving
 metrics = evaluate_log_and_save(
-    oof_preds=oof_final,
-    test_preds=test_final,
+    oof=oof_final,
+    test=test_final,
     y_true=y,
     test_ids=test_ids,
     model_name="LightGBM_Advanced",
-    eda_used=EDA_TYPE,
-    postprocess_method=POST_PROCESS_METHOD
+    eda=EDA_TYPE,
+    method=POST_PROCESS_METHOD
 )
 
 print("\n=== ZERO CONCENTRATION (OOF) ===")
