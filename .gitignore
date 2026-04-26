@@ -1,0 +1,8 @@
+submissions
+models/submissions
+report
+eda_plots
+
+*.sqlite
+.chroma_db/
+.env
