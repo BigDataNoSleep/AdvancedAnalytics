@@ -6,11 +6,25 @@ const answerNode = document.querySelector("#answer");
 const matchesNode = document.querySelector("#matches");
 const matchCountNode = document.querySelector("#match-count");
 const matchTemplate = document.querySelector("#match-template");
+const pipelineLogNode = document.querySelector("#pipeline-log");
+const pipelineLogDetails = document.querySelector("#pipeline-log-details");
 
 function setLoadingState(isLoading, message) {
   submitButton.disabled = isLoading;
   submitButton.textContent = isLoading ? "Searching..." : "Find matches";
   statusNode.textContent = message;
+}
+
+function addLogEntry(msg) {
+  // Remove placeholder if present
+  const placeholder = pipelineLogNode.querySelector(".log-placeholder");
+  if (placeholder) placeholder.remove();
+
+  const p = document.createElement("p");
+  p.className = "log-entry";
+  p.textContent = msg;
+  pipelineLogNode.appendChild(p);
+  pipelineLogNode.scrollTop = pipelineLogNode.scrollHeight;
 }
 
 function renderMatches(matches) {
@@ -68,9 +82,12 @@ form.addEventListener("submit", async (event) => {
   }
 
   setLoadingState(true, "Querying local RAG pipeline...");
-  answerNode.textContent = "Thinking...";
+  answerNode.innerHTML = "<em>Thinking...</em>";
   matchesNode.innerHTML = "";
   matchCountNode.textContent = "0 games";
+  pipelineLogNode.innerHTML = "";
+  pipelineLogDetails.open = true;
+  addLogEntry("⏳ Starting pipeline...");
 
   try {
     const response = await fetch("/api/search", {
@@ -78,17 +95,67 @@ form.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query }),
     });
-    const payload = await response.json();
 
     if (!response.ok) {
-      throw new Error(payload.error || "Request failed");
+      const err = await response.json();
+      throw new Error(err.error || "Request failed");
     }
 
-    answerNode.textContent = payload.answer;
-    renderMatches(payload.matches || []);
-    setLoadingState(false, `Done. Indexed ${payload.meta.indexed_games} games.`);
+    // Read the SSE stream
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      // Parse SSE events from the buffer
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop(); // Keep incomplete event in buffer
+
+      for (const part of parts) {
+        if (!part.trim()) continue;
+
+        const lines = part.split("\n");
+        let eventType = "message";
+        let data = "";
+
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7);
+          } else if (line.startsWith("data: ")) {
+            data = line.slice(6);
+          }
+        }
+
+        if (!data) continue;
+
+        try {
+          const parsed = JSON.parse(data);
+
+          if (eventType === "log") {
+            addLogEntry(parsed.log);
+          } else if (eventType === "result") {
+            // Render the answer as markdown
+            if (typeof marked !== "undefined" && marked.parse) {
+              answerNode.innerHTML = marked.parse(parsed.answer || "");
+            } else {
+              answerNode.textContent = parsed.answer;
+            }
+            renderMatches(parsed.matches || []);
+            setLoadingState(false, `Done. Indexed ${parsed.meta.indexed_games} games.`);
+          }
+        } catch (e) {
+          console.warn("Failed to parse SSE data:", data, e);
+        }
+      }
+    }
   } catch (error) {
     answerNode.textContent = error.message;
+    addLogEntry(`❌ Error: ${error.message}`);
     renderMatches([]);
     setLoadingState(false, "Search failed.");
   }

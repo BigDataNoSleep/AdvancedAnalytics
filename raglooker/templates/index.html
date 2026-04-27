@@ -28,6 +28,13 @@
             <p id="status" class="status">Ready.</p>
           </div>
         </form>
+
+        <details id="pipeline-log-details" class="pipeline-log-details">
+          <summary class="pipeline-log-summary">Pipeline Log</summary>
+          <div id="pipeline-log" class="pipeline-log">
+            <p class="log-placeholder">Run a search to see the RAG pipeline steps here.</p>
+          </div>
+        </details>
       </section>
 
       <section class="results-stack">
@@ -72,6 +79,7 @@
       </article>
     </template>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   </body>
 </html>

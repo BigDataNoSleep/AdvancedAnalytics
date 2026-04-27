@@ -1,6 +1,6 @@
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 from recommender import create_search_engine
 
 
@@ -19,7 +19,14 @@ def create_app() -> Flask:
         if not query:
             return jsonify({"error": "A game description is required."}), 400
         try:
-            return jsonify(search_engine.search(query))
+            return Response(
+                search_engine.search_stream(query),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         except Exception as exc:
             return jsonify({"error": "Search failed.", "details": str(exc)}), 500
 
@@ -30,4 +37,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False, use_reloader=False)

@@ -153,9 +153,34 @@ button:disabled {
 }
 
 .answer-copy {
-  white-space: pre-wrap;
   line-height: 1.65;
   font-size: 1rem;
+}
+
+.answer-copy p {
+  margin: 0.6rem 0;
+}
+
+.answer-copy h1,
+.answer-copy h2,
+.answer-copy h3 {
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  margin: 1rem 0 0.4rem;
+  color: var(--text);
+}
+
+.answer-copy strong {
+  color: var(--text);
+}
+
+.answer-copy ul,
+.answer-copy ol {
+  padding-left: 1.4rem;
+  margin: 0.4rem 0;
+}
+
+.answer-copy li {
+  margin-bottom: 0.3rem;
 }
 
 .panel-header {
@@ -293,4 +318,55 @@ button:disabled {
   .matches {
     grid-template-columns: 1fr;
   }
+}
+
+/* Pipeline Log */
+.pipeline-log-details {
+  margin-top: 0.8rem;
+}
+
+.pipeline-log-summary {
+  cursor: pointer;
+  font-family: "Trebuchet MS", "Gill Sans", sans-serif;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--accent-dark);
+  letter-spacing: 0.04em;
+  padding: 0.4rem 0;
+  user-select: none;
+}
+
+.pipeline-log-summary:hover {
+  color: var(--accent);
+}
+
+.pipeline-log {
+  background: #1a1a2e;
+  color: #a8e6cf;
+  font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+  font-size: 0.78rem;
+  line-height: 1.7;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  margin-top: 0.4rem;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pipeline-log .log-entry {
+  margin: 0;
+  padding: 0.1rem 0;
+  border-bottom: 1px solid rgba(168, 230, 207, 0.08);
+}
+
+.pipeline-log .log-entry:last-child {
+  border-bottom: none;
+}
+
+.pipeline-log .log-placeholder {
+  color: rgba(168, 230, 207, 0.4);
+  margin: 0;
+  font-style: italic;
 }
