@@ -36,8 +36,7 @@ report/*.out
 report/*.synctex.gz
 submissions
 models/submissions
-report
-eda_plots
+# eda_plots
 
 # Ignore large database and temporary SQLite files
 *.sqlite*

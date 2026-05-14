@@ -46,6 +46,8 @@
 \makeatother
 
 \usepackage[font=small,labelfont=bf]{caption}
+\usepackage{subcaption}
+
 \setlength{\abovecaptionskip}{4pt}
 \setlength{\belowcaptionskip}{2pt}
 \setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
@@ -108,12 +110,36 @@
 \pagenumbering{arabic}
 \vspace*{-1.5cm}
 
-\mainchapter{Example chapter}
-\input{chapters/example}
+\mainchapter{Introduction}
+\input{chapters/intro}
 
 \clearpage
-\addcontentsline{toc}{chapter}{Bibliography}
-\bibliographystyle{ieeetr}
-\bibliography{references}
+
+\mainchapter{Task 2: Lego Minifigure Theme Classification}
+
+\input{chapters/2}
+
+\clearpage
+
+\mainchapter{Task 3: LLM-Based Recommender System}
+
+\input{chapters/3}
+
+\clearpage
+
+
+%\clearpage
+
+\mainchapter{Appendix}
+\input{chapters/appendix}
+
+\clearpage
+
+%\addcontentsline{toc}{chapter}{Bibliography}
+%
+%\bibliographystyle{ieeetr}
+%\bibliography{references}
+
+
 
 \end{document}
