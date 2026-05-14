@@ -1,0 +1,12 @@
+# LaTeX build artifacts (PDF is kept; remove this line if you prefer not to track main.pdf)
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.log
+*.lot
+*.out
+*.synctex.gz
+*.toc
