@@ -11,3 +11,10 @@ lightgbm_baseline_predictions.csv
 lightgbm_tuning_predictions.csv
 ensemble_final_predictions.csv
 final_modelling_dataset.csv
+task3/raglooker/*
+.env
+.gitignore
+task2_report.md
+models/*
+eda_plots/*
+task3/*
