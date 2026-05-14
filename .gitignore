@@ -21,6 +21,7 @@ venv/
 # Project specific
 data_clean2.py
 task2_report.md
+models/
 task3/*
 !task3/report_task3.md
 
