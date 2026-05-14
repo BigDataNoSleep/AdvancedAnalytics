@@ -4,6 +4,8 @@ eda_plots/*
 submissions/
 output_predictions/
 *.csv
+*.sqlite*
+.chroma_db/
 
 # Python
 __pycache__/
@@ -13,7 +15,10 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 .env
+.python-version
+uv.lock
 
 # macOS
 .DS_Store
@@ -34,21 +39,3 @@ report/*.fdb_latexmk
 report/*.toc
 report/*.out
 report/*.synctex.gz
-submissions
-models/submissions
-report
-eda_plots
-
-# Ignore large database and temporary SQLite files
-*.sqlite*
-.chroma_db/
-
-# Ignore secrets and environments
-.env
-.venv/
-.python-version
-uv.lock
-
-# Ignore system and cache files
-__pycache__/
-.DS_Store
