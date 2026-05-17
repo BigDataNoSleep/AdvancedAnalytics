@@ -1,0 +1,11 @@
+Timestamp,Model,EDA,MAE,Spearman,ZeroRate,PostProcess
+2026-04-23 16:04:27,LightGBM_Advanced,advanced,62.4100,0.366270,26.61%,matthias_only
+2026-04-23 16:06:43,LightGBM_Advanced,advanced,62.4100,0.366270,26.61%,matthias_only
+2026-04-23 16:07:28,LightGBM_Advanced,advanced,62.4100,0.366270,26.61%,matthias_only
+2026-04-23 16:11:36,LightGBM_Advanced,advanced,62.4100,0.366270,26.61%,matthias_only
+2026-04-23 16:13:27,LightGBM_Advanced,advanced,62.3889,0.408785,75.00%,best
+2026-04-23 16:14:10,LightGBM_Advanced,advanced,62.3889,0.408785,75.00%,best
+2026-04-23 16:17:34,LightGBM_Advanced,advanced,62.3889,0.408785,75.00%,best
+2026-04-23 16:26:40,LightGBM_Advanced,advanced,63.3648,0.350616,90.01%,ultra_combo_cv
+2026-04-23 16:29:12,LightGBM_Advanced,advanced,62.4100,0.366270,26.61%,recency_only_cv
+2026-04-24 10:42:45,LightGBM_Advanced,advanced,62.5341,0.409678,74.27%,shoe_pro
