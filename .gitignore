@@ -10,7 +10,6 @@ catboost_baseline_predictions.csv
 lightgbm_baseline_predictions.csv
 lightgbm_tuning_predictions.csv
 ensemble_final_predictions.csv
-report/
 
 # Ignored from other branches / unneeded
 .DS_Store
@@ -18,7 +17,7 @@ report/
 __pycache__/
 task2_report.md
 task3/
-README.md
+
 # Data and Results
 data/*
 eda_plots/*
