@@ -19,8 +19,23 @@ sns.set_theme(style="whitegrid")
 # %% [markdown]
 # ## Load Data
 # We are loading the transaction data from the CSV file.
-transactions_path = "/Users/vincecoppens/Documents/Courses/Big Data/AdvancedAnalytics/data/transactions_2016_2017.csv"
-customer_path = "/Users/vincecoppens/Documents/Courses/Big Data/AdvancedAnalytics/data/customer_clv_train.csv"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+possible_data_dirs = [
+    os.path.join(script_dir, "data"),
+    os.path.abspath(os.path.join(script_dir, os.pardir, "data")),
+    os.path.abspath(os.path.join(script_dir, os.pardir, os.pardir, "data")),
+]
+
+for data_dir in possible_data_dirs:
+    if os.path.isdir(data_dir):
+        break
+else:
+    raise FileNotFoundError(
+        "Could not locate the data directory. Checked: " + ", ".join(possible_data_dirs)
+    )
+
+transactions_path = os.path.join(data_dir, "transactions_2016_2017.csv")
+customer_path = os.path.join(data_dir, "customer_clv_train.csv")
 
 # Load transaction and customer datasets
 # order_date and pack_date are parsed as datetime for later time-based features
@@ -667,7 +682,13 @@ plt.figure(figsize=(8,5))
 sns.histplot(customer_features['revenue_2018_2019'], bins=50)
 plt.title("Future revenue distribution")
 plt.savefig(f"{plot_dir}/target_distribution.png", bbox_inches='tight')
-plt.show()
+plt.close()
+
+plt.figure(figsize=(8,5))
+sns.histplot(customer_features.loc[customer_features['revenue_2018_2019'] != 0, 'revenue_2018_2019'], bins=50)
+plt.title("Future revenue distribution (without zeros)")
+plt.savefig(f"{plot_dir}/target_distribution_without_zeros.png", bbox_inches='tight')
+plt.close()
 
 # Log distribution (important because CLV is skewed)
 
@@ -675,7 +696,13 @@ plt.figure(figsize=(8,5))
 sns.histplot(np.log1p(customer_features['revenue_2018_2019']), bins=50)
 plt.title("Log future revenue distribution")
 plt.savefig(f"{plot_dir}/target_log_distribution.png", bbox_inches='tight')
-plt.show()
+plt.close()
+
+plt.figure(figsize=(8,5))
+sns.histplot(np.log1p(customer_features.loc[customer_features['revenue_2018_2019'] != 0, 'revenue_2018_2019']), bins=50)
+plt.title("Log future revenue distribution (without zeros)")
+plt.savefig(f"{plot_dir}/target_log_distribution_without_zeros.png", bbox_inches='tight')
+plt.close()
 
 # ------------------------------------------------------------
 # Key feature distributions
@@ -696,7 +723,13 @@ for col in key_features:
     sns.histplot(customer_features[col], bins=50)
     plt.title(col)
     plt.savefig(f"{plot_dir}/{col}_distribution.png", bbox_inches='tight')
-    plt.show()
+    plt.close()
+
+    plt.figure(figsize=(6,4))
+    sns.histplot(customer_features.loc[customer_features[col] != 0, col], bins=50)
+    plt.title(f"{col} (without zeros)")
+    plt.savefig(f"{plot_dir}/{col}_distribution_without_zeros.png", bbox_inches='tight')
+    plt.close()
 
 # ------------------------------------------------------------
 # Correlation with target
@@ -726,7 +759,7 @@ sns.heatmap(
     center=0
 )
 plt.title("Top feature correlations")
-plt.show()
+plt.close()
 
 # ------------------------------------------------------------
 # Outlier inspection
@@ -745,7 +778,7 @@ for col in outlier_cols:
     sns.boxplot(x=customer_features[col])
     plt.title(col)
     plt.savefig(f"{plot_dir}/{col}_boxplot.png", bbox_inches='tight')
-    plt.show()
+    plt.close()
 
 # ------------------------------------------------------------
 # Behaviour vs target plots
@@ -768,7 +801,7 @@ for col in important_features:
     )
     plt.title(f"{col} vs future revenue")
     plt.savefig(f"{plot_dir}/{col}_vs_target.png", bbox_inches='tight')
-    plt.show()
+    plt.close()
 
 # ------------------------------------------------------------
 # Missing values check

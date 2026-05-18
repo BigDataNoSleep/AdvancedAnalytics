@@ -292,7 +292,13 @@ def search_postprocess_on_oof(oof_pred, y_true, train_zero_rate, known_values, r
     best_mae = np.inf
 
     for method in methods:
-        pp, _ = fit_apply_post_processing(oof_pred, oof_pred, y_true, method, train_zero_rate, known_values, recency_train, recency_train)
+        pp, _ = fit_apply_post_processing(
+            oof_pred, oof_pred, y_true, method,
+            train_zero_rate=train_zero_rate,
+            known_values=known_values,
+            recency_train=recency_train,
+            recency_test=recency_train
+        )
         metrics = calculate_metrics(y_true, pp)
 
         rows.append({
@@ -407,7 +413,7 @@ oof_final, comp_final = fit_apply_post_processing(
     oof_preds=oof_best_raw,
     test_preds=comp_final,
     y_true=y_full.to_numpy(),
-    method_name=best_pp_name,
+    method=best_pp_name,
     train_zero_rate=train_zero_rate,
     known_values=known_values,
     recency_train=X_full['recency_days'],
@@ -423,13 +429,13 @@ if best_ensemble_result["weights"] is not None:
     weights_dict = dict(zip(best_ensemble_result["subset"], best_ensemble_result["weights"]))
 
 metrics = evaluate_log_and_save(
-    oof_preds=oof_final,
-    test_preds=comp_final,
-    y_true=y_full,
-    test_ids=comp_merged["cust_id"],
+    oof_final,
+    comp_final,
+    y_full,
+    comp_merged["cust_id"],
     model_name="Final_Ensemble",
-    eda_used=EDA_TYPE,
-    postprocess_method=best_pp_name
+    eda=EDA_TYPE,
+    method=best_pp_name
 )
 
 print("\n=== ZERO PERCENTAGE SUMMARY ===")

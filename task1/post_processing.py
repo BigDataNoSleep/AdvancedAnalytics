@@ -187,12 +187,46 @@ def fit_apply_post_processing(oof_preds, test_preds, y_true, method, **kwargs):
     if method == "snap_only":
         return apply_snapping(oof, known), apply_snapping(test, known)
 
-    if method == "recency_only_cv":
+    if method == "recency_only_cv" or method == "recency_only":
         params = tune_recency_filter_cv(y_t, oof, rec_train)
         return apply_matthias_filter(oof, rec_train, params), apply_matthias_filter(test, rec_test, params)
 
-    # --- Compound Methods ---
-    if method == "ultra_combo_cv":
+    if method == "force_zero_rate":
+        q = kwargs.get('train_zero_rate', 0.0)
+        return apply_zero_rate(oof, q), apply_zero_rate(test, q)
+
+    if method == "zero_then_snap":
+        q = kwargs.get('train_zero_rate', 0.0)
+        oof = apply_zero_rate(oof, q)
+        test = apply_zero_rate(test, q)
+        return apply_snapping(oof, known), apply_snapping(test, known)
+
+    if method == "piecewise_scale":
+        f = tune_scaling_factor(y_t, oof)
+        return apply_scaling(oof, f), apply_scaling(test, f)
+
+    if method == "quantile_map":
+        qt_p, qt_t = QuantileTransformer(output_distribution='uniform'), QuantileTransformer(output_distribution='uniform')
+        qt_p.fit(oof.reshape(-1, 1)); qt_t.fit(y_t.reshape(-1, 1))
+        return (
+            qt_t.inverse_transform(qt_p.transform(oof.reshape(-1, 1))).ravel(),
+            qt_t.inverse_transform(qt_p.transform(test.reshape(-1, 1))).ravel()
+        )
+
+    if method == "strong_combo":
+        qt_p, qt_t = QuantileTransformer(output_distribution='uniform'), QuantileTransformer(output_distribution='uniform')
+        qt_p.fit(oof.reshape(-1, 1)); qt_t.fit(y_t.reshape(-1, 1))
+        oof = qt_t.inverse_transform(qt_p.transform(oof.reshape(-1, 1))).ravel()
+        test = qt_t.inverse_transform(qt_p.transform(test.reshape(-1, 1))).ravel()
+        q = tune_zero_rate(y_t, oof)
+        oof, test = apply_zero_rate(oof, q), apply_zero_rate(test, q)
+        f = tune_scaling_factor(y_t, oof)
+        oof, test = apply_scaling(oof, f), apply_scaling(test, f)
+        oof, test = apply_snapping(oof, known), apply_snapping(test, known)
+        params = tune_recency_filter_cv(y_t, oof, rec_train)
+        return apply_matthias_filter(oof, rec_train, params), apply_matthias_filter(test, rec_test, params)
+
+    if method == "ultra_combo_cv" or method == "ultra_combo":
         # 1. Dist Mapping
         qt_p, qt_t = QuantileTransformer(output_distribution='uniform'), QuantileTransformer(output_distribution='uniform')
         qt_p.fit(oof.reshape(-1, 1)); qt_t.fit(y_t.reshape(-1, 1))
@@ -220,7 +254,7 @@ def fit_apply_post_processing(oof_preds, test_preds, y_true, method, **kwargs):
         return fit_apply_post_processing(oof_preds, test_preds, y_true, best_m, **kwargs)
 
     # Legacy grid search triggers
-    if method.startswith("zeroq_") or method.startswith("scale_"):
+    if method.startswith("zeroq_") or method.startswith("scale_") or method.startswith("zeroqscale_"):
         return apply_simple_method(oof, test, method, y_t)
 
     raise ValueError(f"Unknown post-processing method: {method}")
@@ -245,6 +279,13 @@ def find_best_method(oof_preds, y_true, known=None, recency=None, returns=None):
 
 def apply_simple_method(oof, test, method, y_true):
     """Helper for simple grid-based methods (e.g. scale_1.2)."""
+    if method.startswith("zeroqscale_"):
+        parts = method.split("_")
+        q = float(parts[1])
+        f = float(parts[2])
+        oof = apply_zero_rate(oof, q)
+        test = apply_zero_rate(test, q)
+        return apply_scaling(oof, f), apply_scaling(test, f)
     if method.startswith("zeroq_"):
         q = float(method.split("_")[1])
         return apply_zero_rate(oof, q), apply_zero_rate(test, q)
@@ -272,6 +313,24 @@ def evaluate_log_and_save(oof, test, y_true, test_ids, model_name, eda="standard
     # Saving
     save_submissions(oof, test, y_true, test_ids, model_name)
     return metrics
+
+
+def run_full_post_processing(model, X_train, y_true, y_pred, model_name, eda_used="standard", method="none"):
+    """Basic full post-processing entry point for legacy model scripts."""
+    print(f"\n--- Full post-processing: {model_name} (EDA: {eda_used}) ---")
+    metrics = calculate_metrics(y_true, y_pred)
+    for m, val in metrics.items(): print(f"  {m:<10}: {val:.4f}")
+    
+    plot_diagnostics(y_true, y_pred, model_name)
+    log_experiment(model_name, metrics, method, (y_pred == 0).mean(), eda_used)
+
+    if hasattr(model, 'feature_importances_') or hasattr(model, 'feature_importance'):
+        if hasattr(X_train, 'columns'):
+            plot_feature_importance(model, list(X_train.columns), model_name)
+        else:
+            plot_feature_importance(model, [], model_name)
+    return metrics
+
 
 def plot_diagnostics(y_true, y_pred, name):
     """Generates scatter and error distribution plots."""

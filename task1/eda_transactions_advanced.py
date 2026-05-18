@@ -1,6 +1,28 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
 from eda_transactions import get_customer_model_data
+
+
+def plot_distribution_with_and_without_zeros(series, title, filename_base, plot_dir="eda_plots", bins=50):
+    os.makedirs(plot_dir, exist_ok=True)
+
+    plt.figure(figsize=(8, 5))
+    sns.histplot(series, bins=bins)
+    plt.title(title)
+    plt.savefig(os.path.join(plot_dir, f"{filename_base}.png"), bbox_inches='tight')
+    plt.close()
+
+    non_zero = series[series != 0]
+    if len(non_zero) > 0:
+        plt.figure(figsize=(8, 5))
+        sns.histplot(non_zero, bins=bins)
+        plt.title(f"{title} (without zeros)")
+        plt.savefig(os.path.join(plot_dir, f"{filename_base}_without_zeros.png"), bbox_inches='tight')
+        plt.close()
+
 
 def build_advanced_customer_features(df_input):
     from eda_transactions import build_customer_features as build_base

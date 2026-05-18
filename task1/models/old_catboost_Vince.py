@@ -246,20 +246,20 @@ if __name__ == "__main__":
         oof_preds=results['val_preds'],
         test_preds=results['comp_preds'],
         y_true=y_full_train.values,
-        method_name=POST_PROCESS_METHOD,
+        method=POST_PROCESS_METHOD,
         known_values=y_full_train.values,
         recency_train=X_full_train['recency_days'],
         recency_test=test_unlabelled['recency_days']
     )
     
     metrics = evaluate_log_and_save(
-        oof_preds=oof_final,
-        test_preds=test_final,
+        oof=oof_final,
+        test=test_final,
         y_true=y_full_train,
         test_ids=test_unlabelled.index,
         model_name="CatBoost",
-        eda_used=EDA_TYPE,
-        postprocess_method=POST_PROCESS_METHOD
+        eda=EDA_TYPE,
+        method=POST_PROCESS_METHOD
     )
 
 # %%
