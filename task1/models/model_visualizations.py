@@ -29,7 +29,6 @@ OOF_FILES = {
     "XGBoost Baseline": "xgboost_oof.csv",
 }
 
-# Resolve correct submissions directory path (handles both /models and root contexts)
 _base_dir = Path(__file__).resolve().parent
 SUBMISSIONS_DIR = _base_dir.parent / "submissions" if _base_dir.name == "models" else Path("submissions")
 OUTPUT_DIR = Path("model_visualizations")
@@ -37,53 +36,117 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 # ============================================================
-# LOAD TRUE TARGET
+# HELPER FUNCTIONS
 # ============================================================
 
-X_train, X_val, X_test, y_train, y_val, y_test, test_unlabelled = get_advanced_customer_model_data()
-
-X = pd.concat([X_train, X_val, X_test])
-y_true = pd.concat([y_train, y_val, y_test]).reset_index(drop=True)
+def clean_name(name):
+    return name.lower().replace(" ", "_").replace("/", "_")
 
 
-# ============================================================
-# LOAD OOF PREDICTIONS
-# ============================================================
+def get_prediction_column(df):
+    if "prediction" in df.columns:
+        return "prediction"
+    if "revenue" in df.columns:
+        return "revenue"
+    return None
 
-preds = {}
 
-for model_name, filename in OOF_FILES.items():
+def get_model_base_df(X_part, y_part):
+    """
+    Creates a safe customer-level reference table.
+    Assumes cust_id is stored in the index, which is how your modelling data appears to work.
+    """
+    return pd.DataFrame({
+        "cust_id": X_part.index.astype(str),
+        "y_true": y_part.to_numpy()
+    }).reset_index(drop=True)
+
+
+def load_oof_with_alignment(model_name, filename, reference_df):
     path = SUBMISSIONS_DIR / filename
 
     if not path.exists():
         print(f"Skipping {model_name}: file not found at {path}")
-        continue
+        return None
 
     df = pd.read_csv(path)
+    pred_col = get_prediction_column(df)
 
-    if "prediction" in df.columns:
-        pred_col = "prediction"
-    elif "revenue" in df.columns:
-        pred_col = "revenue"
-    else:
-        print(f"Skipping {model_name}: no 'prediction' or 'revenue' column in {filename}")
-        continue
+    if pred_col is None:
+        print(f"Skipping {model_name}: no prediction/revenue column found.")
+        return None
 
-    p = df[pred_col].to_numpy(dtype=float)
-    preds[model_name] = np.maximum(p, 0)
+    if "cust_id" not in df.columns:
+        print(f"Skipping {model_name}: no cust_id column, so safe alignment is impossible.")
+        return None
 
-if not preds:
-    raise ValueError("No valid OOF prediction files found. Check OOF_FILES and submissions folder.")
+    df = df[["cust_id", pred_col]].copy()
+    df["cust_id"] = df["cust_id"].astype(str)
+    df = df.rename(columns={pred_col: "pred"})
 
-# Align lengths of all predictions, y_true, and X to the minimum available length
-# This ensures we can compare models evaluated on train+val with models evaluated on train+val+test
-min_len = min(len(y_true), min(len(p) for p in preds.values()))
+    if df["cust_id"].duplicated().any():
+        print(f"Skipping {model_name}: duplicate cust_id values found.")
+        return None
 
-y_true = y_true.iloc[:min_len].reset_index(drop=True)
-X = X.iloc[:min_len].reset_index(drop=True)
+    merged = reference_df.merge(df, on="cust_id", how="inner")
+    merged["pred"] = np.maximum(merged["pred"].astype(float), 0)
 
-for model_name in list(preds.keys()):
-    preds[model_name] = preds[model_name][:min_len]
+    missing = len(reference_df) - len(merged)
+
+    print(f"\n{model_name}")
+    print(f"OOF rows: {len(df)}")
+    print(f"Aligned rows: {len(merged)}")
+    print(f"Missing from full reference: {missing}")
+
+    if len(merged) == 0:
+        print(f"Skipping {model_name}: no overlapping cust_id values.")
+        return None
+
+    return merged
+
+
+# ============================================================
+# LOAD TRUE TARGET AND FEATURES
+# ============================================================
+
+X_train, X_val, X_test, y_train, y_val, y_test, test_unlabelled = get_advanced_customer_model_data()
+
+X_full = pd.concat([X_train, X_val, X_test])
+y_full = pd.concat([y_train, y_val, y_test])
+
+reference_df = get_model_base_df(X_full, y_full)
+
+# Add recency if available
+if "recency_days" in X_full.columns:
+    recency_df = pd.DataFrame({
+        "cust_id": X_full.index.astype(str),
+        "recency_days": X_full["recency_days"].to_numpy()
+    })
+    reference_df = reference_df.merge(recency_df, on="cust_id", how="left")
+
+
+# ============================================================
+# LOAD AND ALIGN OOF PREDICTIONS BY cust_id
+# ============================================================
+
+model_data = {}
+
+print("\n" + "=" * 60)
+print("LOADING AND ALIGNING OOF FILES BY cust_id")
+print("=" * 60)
+
+for model_name, filename in OOF_FILES.items():
+    aligned = load_oof_with_alignment(model_name, filename, reference_df)
+
+    if aligned is not None:
+        model_data[model_name] = aligned
+
+if not model_data:
+    raise ValueError("No valid aligned OOF files found.")
+
+print("\nModels kept for visualization:")
+for model_name, df in model_data.items():
+    print(f"- {model_name}: {len(df)} aligned rows")
 
 
 # ============================================================
@@ -92,21 +155,26 @@ for model_name in list(preds.keys()):
 
 metrics_rows = []
 
-for model_name, p in preds.items():
-    mae = mean_absolute_error(y_true, p)
-    spearman, _ = spearmanr(y_true, p)
-    zero_rate = np.mean(p == 0)
+for model_name, df in model_data.items():
+    y_true = df["y_true"].to_numpy()
+    pred = df["pred"].to_numpy()
+
+    mae = mean_absolute_error(y_true, pred)
+    spearman, _ = spearmanr(y_true, pred)
+    zero_rate = np.mean(pred == 0)
 
     metrics_rows.append({
         "Model": model_name,
+        "Rows": len(df),
         "MAE": mae,
-        "Spearman": spearman,
+        "Spearman": 0.0 if np.isnan(spearman) else spearman,
         "ZeroRate": zero_rate,
     })
 
 metrics_df = pd.DataFrame(metrics_rows).sort_values("MAE")
 metrics_df.to_csv(OUTPUT_DIR / "model_metrics_summary.csv", index=False)
 
+print("\nMetrics summary:")
 print(metrics_df)
 
 
@@ -116,7 +184,6 @@ print(metrics_df)
 
 plt.figure(figsize=(8, 5))
 plt.bar(metrics_df["Model"], metrics_df["MAE"])
-plt.ylim(60, 65)
 plt.ylabel("MAE")
 plt.title("Model comparison by MAE")
 plt.xticks(rotation=30, ha="right")
@@ -132,7 +199,6 @@ plt.close()
 plt.figure(figsize=(8, 5))
 plt.bar(metrics_df["Model"], metrics_df["Spearman"])
 plt.ylabel("Spearman correlation")
-plt.ylim(0.35, 0.45)
 plt.title("Model comparison by Spearman correlation")
 plt.xticks(rotation=30, ha="right")
 plt.tight_layout()
@@ -162,29 +228,27 @@ plt.close()
 # 4. PREDICTED VS ACTUAL, LOG SCALE
 # ============================================================
 
-for model_name, p in preds.items():
+for model_name, df in model_data.items():
+    y_true = df["y_true"].to_numpy()
+    pred = df["pred"].to_numpy()
+
     plt.figure(figsize=(6, 6))
-    
-    # Randomly sample 1000 points to reduce noise
-    sample_size = min(1000, len(y_true))
+
+    sample_size = min(1000, len(df))
     np.random.seed(42)
-    idx = np.random.choice(len(y_true), sample_size, replace=False)
-    
-    plt.scatter(np.log1p(y_true.iloc[idx]), np.log1p(p[idx]), alpha=0.25, s=8)
+    idx = np.random.choice(len(df), sample_size, replace=False)
 
-    # Calculate and display points at (0, 0)
-    zero_zero_count = np.sum((y_true.iloc[idx] == 0) & (p[idx] == 0))
-    plt.text(0, 0, str(zero_zero_count), color='red', fontsize=12, fontweight='bold', ha='left', va='bottom')
+    plt.scatter(np.log1p(y_true[idx]), np.log1p(pred[idx]), alpha=0.25, s=8)
 
-    # Calculate and display points at (0, x) where x != 0
-    zero_x_count = np.sum((y_true.iloc[idx] == 0) & (p[idx] != 0))
-    plt.text(0, 7, str(zero_x_count), color='red', fontsize=12, fontweight='bold', ha='left', va='top')
+    zero_zero_count = np.sum((y_true[idx] == 0) & (pred[idx] == 0))
+    zero_x_count = np.sum((y_true[idx] == 0) & (pred[idx] != 0))
+    y_zero_count = np.sum((y_true[idx] != 0) & (pred[idx] == 0))
 
-    # Calculate and display points at (y, 0) where y != 0
-    y_zero_count = np.sum((y_true.iloc[idx] != 0) & (p[idx] == 0))
-    plt.text(7, 0, str(y_zero_count), color='red', fontsize=12, fontweight='bold', ha='right', va='bottom')
+    plt.text(0, 0, str(zero_zero_count), color="red", fontsize=12, fontweight="bold", ha="left", va="bottom")
+    plt.text(0, 7, str(zero_x_count), color="red", fontsize=12, fontweight="bold", ha="left", va="top")
+    plt.text(7, 0, str(y_zero_count), color="red", fontsize=12, fontweight="bold", ha="right", va="bottom")
 
-    max_val = max(np.log1p(y_true).max(), np.log1p(p).max())
+    max_val = max(np.log1p(y_true).max(), np.log1p(pred).max())
     plt.plot([0, max_val], [0, max_val], linestyle="--")
 
     plt.xlabel("Actual revenue, log(1 + y)")
@@ -192,8 +256,7 @@ for model_name, p in preds.items():
     plt.title(f"Predicted vs actual revenue: {model_name}")
     plt.tight_layout()
 
-    filename = f"predicted_vs_actual_{model_name.lower().replace(' ', '_')}.png"
-    plt.savefig(OUTPUT_DIR / filename, dpi=300)
+    plt.savefig(OUTPUT_DIR / f"predicted_vs_actual_{clean_name(model_name)}.png", dpi=300)
     plt.close()
 
 
@@ -204,8 +267,8 @@ for model_name, p in preds.items():
 residual_data = []
 labels = []
 
-for model_name, p in preds.items():
-    residuals = y_true.to_numpy() - p
+for model_name, df in model_data.items():
+    residuals = df["y_true"].to_numpy() - df["pred"].to_numpy()
     residual_data.append(residuals)
     labels.append(model_name)
 
@@ -221,91 +284,178 @@ plt.close()
 
 
 # ============================================================
-# 6. REVENUE BIN CALIBRATION PLOT
+# 6. REVENUE BIN CALIBRATION PLOTS
 # ============================================================
 
-for model_name, p in preds.items():
-    df_cal = pd.DataFrame({
-        "y_true": y_true.to_numpy(),
-        "pred": p
-    })
+for plot_type in ["linear", "linear_zoomed", "log", "log_zoomed"]:
+    plt.figure(figsize=(9, 6))
+    actual_plotted = False
 
-    df_cal["bin"] = pd.qcut(df_cal["pred"].rank(method="first"), q=10, labels=False)
+    for model_name, df in model_data.items():
+        df_cal = df[["y_true", "pred"]].copy()
 
-    grouped = df_cal.groupby("bin").agg(
+        df_cal["bin"] = pd.qcut(
+            df_cal["pred"].rank(method="first"),
+            q=10,
+            labels=False
+        )
+
+        df_cal["log_y_true"] = np.log1p(df_cal["y_true"])
+        df_cal["log_pred"] = np.log1p(df_cal["pred"])
+
+        grouped = df_cal.groupby("bin").agg(
+            avg_actual=("y_true", "mean"),
+            avg_predicted=("pred", "mean"),
+            avg_log_actual=("log_y_true", "mean"),
+            avg_log_predicted=("log_pred", "mean")
+        ).reset_index()
+
+        x = grouped["bin"] + 1
+
+        if plot_type.startswith("linear"):
+            y_act = grouped["avg_actual"]
+            y_pred = grouped["avg_predicted"]
+            y_label = "Average revenue"
+            title = "Revenue calibration by prediction decile (Linear)"
+        else:
+            y_act = grouped["avg_log_actual"]
+            y_pred = grouped["avg_log_predicted"]
+            y_label = "Average revenue, log(1 + y)"
+            title = "Revenue calibration by prediction decile (Log Scale)"
+
+        if not actual_plotted:
+            plt.plot(x, y_act, label="Actual average revenue", linewidth=2, color="black", linestyle="--")
+            actual_plotted = True
+
+        plt.plot(x, y_pred, label=f"Predicted: {model_name}", linewidth=1)
+
+    plt.xlabel("Prediction decile, low to high")
+    plt.ylabel(y_label)
+
+    if "zoomed" in plot_type:
+        plt.xlim(6, 10)
+        title += " - Zoomed"
+        if plot_type == "linear_zoomed":
+            plt.ylim(bottom=np.exp(6), top=np.exp(10))
+        elif plot_type == "log_zoomed":
+            plt.ylim(bottom=6, top=10)
+
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / f"calibration_deciles_all_models_{plot_type}.png", dpi=300)
+    plt.close()
+
+
+# 7. COMMON-SAMPLE CALIBRATION PLOTS
+# ============================================================
+# This makes calibration plots comparable across models.
+# Only models with cust_id are used, and only customers present in all kept models are used.
+
+common_ids = None
+
+for df in model_data.values():
+    ids = set(df["cust_id"])
+    common_ids = ids if common_ids is None else common_ids.intersection(ids)
+
+common_ids = set(common_ids)
+
+print(f"\nCommon customer sample across kept models: {len(common_ids)} customers")
+
+plt.figure(figsize=(9, 6))
+actual_plotted_common = False
+
+for model_name, df in model_data.items():
+    df_common = df[df["cust_id"].isin(common_ids)].copy()
+
+    df_common["bin"] = pd.qcut(
+        df_common["pred"].rank(method="first"),
+        q=10,
+        labels=False
+    )
+
+    grouped = df_common.groupby("bin").agg(
         avg_actual=("y_true", "mean"),
         avg_predicted=("pred", "mean")
     ).reset_index()
 
-    plt.figure(figsize=(7, 5))
-    plt.plot(grouped["bin"] + 1, grouped["avg_actual"], marker="o", label="Actual average revenue")
-    plt.plot(grouped["bin"] + 1, grouped["avg_predicted"], marker="o", label="Predicted average revenue")
+    if not actual_plotted_common:
+        plt.plot(grouped["bin"] + 1, grouped["avg_actual"], label="Actual average revenue", linewidth=2, color="black", linestyle="--")
+        actual_plotted_common = True
 
-    plt.xlabel("Prediction decile, low to high")
-    plt.ylabel("Average revenue")
-    plt.title(f"Revenue calibration by prediction decile: {model_name}")
-    plt.legend()
+    plt.plot(grouped["bin"] + 1, grouped["avg_predicted"], label=f"Predicted: {model_name}", linewidth=1)
+
+plt.xlabel("Prediction decile, low to high")
+plt.ylabel("Average revenue")
+plt.title("Common-sample calibration (All Models)")
+plt.legend()
+plt.tight_layout()
+plt.savefig(OUTPUT_DIR / "common_sample_calibration_all_models.png", dpi=300)
+plt.close()
+
+# ============================================================
+# 8. MAE BY RECENCY BIN
+# ============================================================
+
+for model_name, df in model_data.items():
+    if "recency_days" not in df.columns:
+        continue
+
+    df_rec = df.copy()
+    df_rec["abs_error"] = np.abs(df_rec["y_true"] - df_rec["pred"])
+
+    df_rec["recency_bin"] = pd.cut(
+        df_rec["recency_days"],
+        bins=[-1, 30, 90, 180, 365, 500, 10_000],
+        labels=["0-30", "31-90", "91-180", "181-365", "366-500", "500+"]
+    )
+
+    grouped = df_rec.groupby("recency_bin", observed=False)["abs_error"].mean().reset_index()
+
+    plt.figure(figsize=(7, 5))
+    plt.bar(grouped["recency_bin"].astype(str), grouped["abs_error"])
+    plt.xlabel("Recency bin, days since last purchase")
+    plt.ylabel("MAE")
+    plt.title(f"Prediction error by recency: {model_name}")
     plt.tight_layout()
 
-    filename = f"calibration_deciles_{model_name.lower().replace(' ', '_')}.png"
-    plt.savefig(OUTPUT_DIR / filename, dpi=300)
+    plt.savefig(OUTPUT_DIR / f"mae_by_recency_{clean_name(model_name)}.png", dpi=300)
     plt.close()
 
 
 # ============================================================
-# 7. MAE BY RECENCY BIN
+# 9. PREDICTION CORRELATION HEATMAP ON COMMON CUSTOMERS
 # ============================================================
 
-if "recency_days" in X.columns:
-    for model_name, p in preds.items():
-        df_rec = pd.DataFrame({
-            "recency_days": X["recency_days"].to_numpy(),
-            "y_true": y_true.to_numpy(),
-            "pred": p
-        })
+if len(model_data) >= 2 and len(common_ids) > 0:
+    pred_frames = []
 
-        df_rec["abs_error"] = np.abs(df_rec["y_true"] - df_rec["pred"])
-        df_rec["recency_bin"] = pd.cut(
-            df_rec["recency_days"],
-            bins=[-1, 30, 90, 180, 365, 500, 10_000],
-            labels=["0-30", "31-90", "91-180", "181-365", "366-500", "500+"]
-        )
+    for model_name, df in model_data.items():
+        temp = df[df["cust_id"].isin(common_ids)][["cust_id", "pred"]].copy()
+        temp = temp.rename(columns={"pred": model_name})
+        pred_frames.append(temp)
 
-        grouped = df_rec.groupby("recency_bin", observed=False)["abs_error"].mean().reset_index()
+    pred_matrix = pred_frames[0]
 
-        plt.figure(figsize=(7, 5))
-        plt.bar(grouped["recency_bin"].astype(str), grouped["abs_error"])
-        plt.xlabel("Recency bin, days since last purchase")
-        plt.ylabel("MAE")
-        plt.title(f"Prediction error by recency: {model_name}")
-        plt.tight_layout()
+    for temp in pred_frames[1:]:
+        pred_matrix = pred_matrix.merge(temp, on="cust_id", how="inner")
 
-        filename = f"mae_by_recency_{model_name.lower().replace(' ', '_')}.png"
-        plt.savefig(OUTPUT_DIR / filename, dpi=300)
-        plt.close()
+    corr = pred_matrix.drop(columns=["cust_id"]).corr()
 
+    plt.figure(figsize=(6, 5))
+    plt.imshow(corr, aspect="auto")
+    plt.colorbar(label="Correlation")
+    plt.xticks(range(len(corr.columns)), corr.columns, rotation=30, ha="right")
+    plt.yticks(range(len(corr.index)), corr.index)
 
-# ============================================================
-# 8. PREDICTION CORRELATION HEATMAP
-# ============================================================
+    for i in range(len(corr.index)):
+        for j in range(len(corr.columns)):
+            plt.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center")
 
-pred_matrix = pd.DataFrame(preds)
-corr = pred_matrix.corr()
-
-plt.figure(figsize=(6, 5))
-plt.imshow(corr, aspect="auto")
-plt.colorbar(label="Correlation")
-plt.xticks(range(len(corr.columns)), corr.columns, rotation=30, ha="right")
-plt.yticks(range(len(corr.index)), corr.index)
-
-for i in range(len(corr.index)):
-    for j in range(len(corr.columns)):
-        plt.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center")
-
-plt.title("Correlation between model predictions")
-plt.tight_layout()
-plt.savefig(OUTPUT_DIR / "model_prediction_correlation_heatmap.png", dpi=300)
-plt.close()
+    plt.title("Correlation between model predictions")
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / "model_prediction_correlation_heatmap.png", dpi=300)
+    plt.close()
 
 
 print(f"\nSaved all plots to: {OUTPUT_DIR.resolve()}")
