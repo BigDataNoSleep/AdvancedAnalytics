@@ -1,3 +1,24 @@
+task1/data/*
+task1/eda_plots/*
+data_clean2.py
+task1/submissions/
+output_predictions/
+test_predictions.csv
+catboost_optimized_predictions.csv
+catboost_predictions.csv
+catboost_baseline_predictions.csv
+lightgbm_baseline_predictions.csv
+lightgbm_tuning_predictions.csv
+ensemble_final_predictions.csv
+report/
+
+# Ignored from other branches / unneeded
+.DS_Store
+.env
+__pycache__/
+task2_report.md
+task3/
+README.md
 # Data and Results
 data/*
 eda_plots/*
