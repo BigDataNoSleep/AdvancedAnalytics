@@ -1,0 +1,106 @@
+\section{Task framing and preliminary models}
+
+\subsection{Choice of modelling objective}
+Of the three candidate framings, we went with multiclass classification. The multilabel formulation was discarded on the grounds of insufficient signal: only 87 objects carry three or more theme labels, leaving the multilabel structure too sparse to justify the added complexity. 
+
+\subsection{Class structure}
+Under the multiclass framing, the dataset spans 122 categories with severe imbalance: the largest contains 3,522 objects, the smallest just one. Rare categories cannot meaningfully be learned by a classifier, and in the extreme tail they cannot even be partitioned across train, validation, and test sets without violating the split. We therefore needed both a top-$k$ cutoff and a backbone choice. Rather than fixing either a priori, we ran three preliminary models, varying one factor at a time, so each comparison would isolate a single design decision.
+
+\subsection{Comparing category counts}
+The first two runs both used \texttt{MobileNetV2} with a frozen ImageNet-pretrained backbone, balanced class weights, and an otherwise identical training procedure. The only difference between them was the label space: top-64 categories versus top-20. On top-64 the model reached a macro F1 of 0.57; on top-20 it reached a macro F1 of 0.68 with 77\% accuracy. The gap of 0.11 in macro F1 is large, and because the architecture and training procedure are held constant, it can be attributed cleanly to category count. 
+
+\subsection{Comparing backbones}
+Holding the label space at top-20 and the training procedure fixed, we then swapped \texttt{MobileNetV2} for \texttt{EfficientNetV2S}, a heavier, more recent backbone, at a higher input resolution of 384$\times$384. The macro F1 moved from 0.68 to 0.70, with accuracy from 77\% to 78\%. The improvement is real but small. Because category count is held constant here, the gap reflects architecture alone: \texttt{EfficientNetV2S} extracts somewhat stronger features from this dataset than \texttt{MobileNetV2}, but the margin is narrow enough that on its own it would not justify the additional compute.
+
+\subsection{Synthesis: choice of $k$ and backbone}
+Read together, the three runs decompose the design space cleanly. Category count is the dominant variable. We therefore chose $k=40$ for the main model: wide enough to keep the task informative, narrow enough to keep every retained class above a defensible per-class sample count.
+
+For the backbone, we kept \texttt{EfficientNetV2S} despite the modest top-20 margin. The reasoning is that the backbone comparison was run with a frozen base, so the 0.02 gain reflects only the quality of the pretrained features feeding into the head. With partial fine-tuning of the upper layers, the stronger backbone has more room to adapt, and the gap should widen. 
+
+\section{Data and preprocessing}
+
+\subsection{Splits and resolution}
+We applied a stratified 70/15/15 split over the 40 retained categories, yielding 10,971 training, 2,351 validation, and 2,351 test images. Stratification was applied at the category level so that each subset preserves the global class distribution. Images were loaded at 384$\times$384 through Keras's \texttt{ImageDataGenerator} with batch size 16.
+
+\subsection{Augmentation}
+Augmentation was applied to the training generator only. The training pipeline applied random rotations of up to 30°, horizontal and vertical shifts of up to 20\%, brightness scaling in the [0.8, 1.2] range, horizontal flipping, and zooming up to 20\%. We did not apply rescale, since \texttt{EfficientNetV2} handles input normalization internally.
+
+\subsection{Initial class weights}
+To handle class imbalance, we computed balanced weights using a standard utility function from \texttt{sklearn}:
+
+\begin{lstlisting}[language=python]
+compute_class_weight(class_weight='balanced', ...)
+\end{lstlisting}
+
+These weights were passed through the \texttt{class\_weight} argument of \texttt{model.fit} and applied in both Phase 1 and Phase 2.
+
+\section{Model and two-phase training}
+
+\subsection{Architecture}
+The model uses \texttt{EfficientNetV2S} as the feature extractor, initialised with ImageNet weights. On top of the convolutional base we built a custom head: \texttt{GlobalAveragePooling2D}, then a \texttt{BatchNormalization} layer, a \texttt{Dense(512, relu)}, a \texttt{Dropout(0.4)}, a second \texttt{BatchNormalization}, and a final \texttt{Dense(40, softmax)}.
+
+\subsection{Phase 1: head training}
+In the first phase the entire \texttt{EfficientNetV2S} backbone was frozen (\texttt{base\_model.trainable = False}), so gradients flowed only into the new head. The model was compiled with the Adam optimizer at a learning rate of $10^{-3}$.
+
+\subsection{Phase 2: partial fine-tuning}
+The base model was unfrozen, after which we re-froze all but the last 100 layers, roughly the top fifth of \texttt{EfficientNetV2S}. The model was recompiled with a learning rate of $10^{-5}$, two orders of magnitude below Phase 1.
+
+\section{Initial evaluation and class-weight smoothing}
+
+\subsection{Initial evaluation}
+After the two-phase training, the model reached an accuracy of 60\% with a macro F1 of 0.58. The precision-recall gap was significant (recall 0.73, precision 0.54).
+
+\subsection{Diagnosis: the balanced weights overcompensate}
+The cause traces back to the standard \texttt{class\_weight='balanced'} setting, which assigns each class a weight inversely proportional to its frequency. For a top-40 distribution where the rarest class has 65x fewer samples than the most frequent, this produces extreme weight ratios, leading to many false positives for rare classes.
+
+\subsection{Square-root smoothing}
+The fix is to compress the weight range using a square-root transformation: 
+
+\begin{center}
+    \texttt{np.sqrt(balanced\_weights)}
+\end{center}
+
+We recompiled the model with the smoothed weights and a learning rate of $10^{-6}$ for a brief correction phase.
+
+\subsection{Final evaluation}
+The corrected model achieved 62\% accuracy on the test set, with a macro F1 of 0.60, macro precision of 0.56, and macro recall of 0.73.
+
+\section{Interpretability}
+
+\subsection{Confusion patterns}
+To establish where the model goes wrong, we plotted the test-set predictions as a 40$\times$40 confusion matrix (Figure \ref{fig:confusion_matrix}). The diagonal is strongest for the four largest classes (DUPLO, Town, Friends, and Star Wars). 
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/A2_confusion_matrix.png}
+    \caption{Confusion matrix for the top-40 Lego minifigure theme classification task.}
+    \label{fig:confusion_matrix}
+\end{figure}
+
+\subsection{Grad-CAM}
+To inspect which regions of the image drive each prediction, we implemented Grad-CAM on the last convolutional layer of the \texttt{EfficientNetV2S} backbone. 
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/A2_GRADCAM1.png}
+    \caption{Grad-CAM: High-confidence correct classification (Star Wars Darth Vader).}
+\end{figure}
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/A2_GRADCAM2.png}
+    \caption{Grad-CAM: Low-confidence correct prediction (Town civilian).}
+\end{figure}
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/A2_GRADCAM3.png}
+    \caption{Grad-CAM: Misclassification due to visual similarity (NINJAGO vs Monkie Kid).}
+    \label{fig:gradcam}
+\end{figure}
+
+\subsection{Observations}
+For correctly classified high-confidence cases, attention concentrates tightly on class-distinctive decals. For instance, on a Star Wars figure, the heatmap locks onto the chest control panel. Low-confidence correct predictions often show diffuse attention, as seen in Town civilian figures where no single theme-specific cue is present. Misclassifications often occur between themes that share design language, where the model attends to the correct region but draws the wrong conclusion.
+
+\section{Conclusion}
+We arrived at a final macro F1 of 0.60 (62\% accuracy) using \texttt{EfficientNetV2S} with partial fine-tuning and square-root-smoothed class weights. The biggest single contributor was the class-weight smoothing, which recovered precision on rare classes without forfeiting recall. This diagnostic refinement outperformed further architectural changes, highlighting the importance of handling class imbalance carefully in long-tail classification tasks.

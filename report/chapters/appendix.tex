@@ -1,0 +1,123 @@
+\section*{Appendix A: Technical Implementation of Task 3}
+\addcontentsline{toc}{section}{Appendix A: Technical Implementation of Task 3}
+
+This appendix contains the primary implementation logic for the Steam RAG Recommender system, with key segments extracted from the \texttt{recommender.py} file.
+
+\subsection*{A.1 LLM-Based Query Expansion and Guardrails}
+The system uses \texttt{Gemma 3 12B IT} to perform self-querying. This stage optimizes the user's natural language input for vector search while extracting metadata constraints and enforcing a relevance guardrail.
+
+\begin{lstlisting}[language=python, caption=The query expansion and guardrail implementation.]
+def rewrite_query(self, query: str) -> dict[str, Any]:
+    prompt = (
+        f"You are a search query guardrail and expansion expert for a Steam game recommendation engine.\n"
+        f"A user entered the following search query: \"{query}\"\n\n"
+        f"Please rewrite and expand this query to be optimal for vector similarity search against a database of game descriptions and tags.\n"
+        f"Include relevant genres, sub-genres, gameplay mechanics, and thematic keywords.\n"
+        f"RULES:\n"
+        f"1. If the query is about video games, expand it for vector similarity search.\n"
+        f"2. If the query is unrelated (e.g., cooking recipes), output ONLY 'NOT_RELEVANT'.\n"
+        f"3. You must respond with ONLY valid JSON in the following format:\n"
+        f"{{\n"
+        f"  \"search_string\": \"keywords, genres, themes...\",\n"
+        f"  \"filters\": {{\"is_free\": true_or_false}}\n"
+        f"}}\n"
+    )
+    try:
+        response = self.client.models.generate_content(model=LLM_MODEL, contents=prompt)
+        text = response.text.strip()
+        if "NOT_RELEVANT" in text.upper() and not text.startswith("{"):
+            return {"search_string": "NOT_RELEVANT", "filters": {}}
+        
+        # Cleanup markdown formatting if present
+        if text.startswith("```json"): text = text[7:-3].strip()
+        return json.loads(text)
+    except Exception as e:
+        return {"search_string": query, "filters": {}}
+\end{lstlisting}
+
+\subsection*{A.2 Hybrid Retrieval and Reciprocal Rank Fusion (RRF)}
+The retrieval engine combines semantic embeddings and exact keyword matching.
+
+\begin{lstlisting}[language=python, caption=The Hybrid Search and RRF merging logic.]
+def retrieve_candidates(self, query: str, filters: dict[str, Any]) -> list[GameRecord]:
+    n_retrieve = 30
+    
+    # 1. Metadata Filtering for ChromaDB
+    where_clause = {"price": 0.0} if filters.get("is_free") else None
+
+    # 2. Vector Search (ChromaDB)
+    chroma_results = self.collection.query(
+        query_texts=[query], n_results=n_retrieve, where=where_clause
+    )
+    chroma_ids = chroma_results['ids'][0] if chroma_results['ids'] else []
+
+    # 3. Keyword Search (BM25)
+    tokenized_query = query.lower().split(" ")
+    bm25_scores = self.bm25.get_scores(tokenized_query)
+    bm25_ranked = sorted(zip(self.records, bm25_scores), key=lambda x: x[1], reverse=True)
+    
+    # Apply filters to BM25 results
+    if filters.get("is_free"):
+        bm25_ranked = [(r, s) for r, s in bm25_ranked if r.raw.get("price", 1.0) == 0.0]
+    bm25_ids = [r.app_id for r, _ in bm25_ranked[:n_retrieve]]
+
+    # 4. Combine with Reciprocal Rank Fusion (RRF)
+    k = 60
+    rrf_scores: dict[str, float] = {}
+    for rank, app_id in enumerate(chroma_ids):
+        rrf_scores[app_id] = rrf_scores.get(app_id, 0.0) + 1.0 / (k + rank + 1)
+    for rank, app_id in enumerate(bm25_ids):
+        rrf_scores[app_id] = rrf_scores.get(app_id, 0.0) + 1.0 / (k + rank + 1)
+
+    sorted_app_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+    return [r for r in self.records if r.app_id in sorted_app_ids[:n_retrieve]]
+\end{lstlisting}
+
+\subsection*{A.3 Cross-Encoder Re-ranking}
+This stage improves precision by performing a full attention pass over the query and candidates.
+
+\begin{lstlisting}[language=python, caption=Cross-Encoder re-ranking implementation.]
+def rank_candidates(self, query: str, candidates: list[GameRecord]) -> list[tuple[GameRecord, float]]:
+    if not candidates: return []
+    pairs = []
+    for r in candidates:
+        tags = ", ".join(r.raw.get("tags", {}).keys()) if isinstance(r.raw.get("tags"), dict) else ""
+        doc = f"Name: {r.name}\nGenres: {', '.join(r.raw.get('genres', []))}\nTags: {tags}\nDescription: {r.short_description}"
+        pairs.append((query, doc))
+    
+    scores = self.cross_encoder.predict(pairs)
+    ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
+    return [(record, float(score)) for record, score in ranked]
+\end{lstlisting}
+
+\subsection*{A.4 Generative Answer with SQL Review Augmentation}
+The final stage fetches the most helpful community reviews in real-time to ground the recommendation.
+
+\begin{lstlisting}[language=python, caption=The final generative stage with review injection.]
+def _get_top_reviews(self, app_id: str, limit: int = 3) -> list[str]:
+    with sqlite3.connect(self.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        query = "SELECT review FROM reviews WHERE appid = ? AND language = 'english' ORDER BY weighted_vote_score DESC LIMIT ?"
+        rows = conn.execute(query, (app_id, limit)).fetchall()
+        return [row["review"] for row in rows if row["review"]]
+
+def generate_answer(self, query: str, matches: list[tuple[GameRecord, float]]) -> str:
+    context_items = []
+    for i, (record, score) in enumerate(matches):
+        reviews = self._get_top_reviews(record.app_id)
+        review_text = "\n".join([f"- {rev[:200]}..." for rev in reviews])
+        item = (
+            f"Rank #{i+1} | Game: {record.name}\n"
+            f"Reception: {record.raw.get('positive')} Positive reviews\n"
+            f"Player Feedback:\n{review_text}"
+        )
+        context_items.append(item)
+
+    prompt = (
+        f"You are a Steam game recommendation expert. User query: \"{query}\"\n\n"
+        f"--- CONTEXT ---\n{chr(10).join(context_items)}\n---------------\n\n"
+        f"Rules: Respect ranking order. Use player reviews to justify the recommendation."
+    )
+    response = self.client.models.generate_content(model=LLM_MODEL, contents=prompt)
+    return response.text
+\end{lstlisting}

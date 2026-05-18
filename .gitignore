@@ -19,3 +19,56 @@ __pycache__/
 task2_report.md
 task3/
 README.md
+# Data and Results
+data/*
+eda_plots/*
+submissions/
+output_predictions/
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env
+
+# macOS
+.DS_Store
+
+# Project specific
+data_clean2.py
+task2_report.md
+models/
+task3/*
+!task3/report_task3.md
+
+# Reports
+report/*.pdf
+report/*.aux
+report/*.log
+report/*.fls
+report/*.fdb_latexmk
+report/*.toc
+report/*.out
+report/*.synctex.gz
+submissions
+models/submissions
+# eda_plots
+
+# Ignore large database and temporary SQLite files
+*.sqlite*
+.chroma_db/
+
+# Ignore secrets and environments
+.env
+.venv/
+.python-version
+uv.lock
+
+# Ignore system and cache files
+__pycache__/
+.DS_Store
