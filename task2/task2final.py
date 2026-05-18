@@ -14,11 +14,14 @@ from tensorflow.keras import layers, models, optimizers
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
+#%%
 # --- STAP 1: HET EXACTE PAD ---
-BASE_DIR = Path(r"/Users/jorenrenders/Desktop/HIRB /master/Advanced Analytics/Task 2/AdvancedAnalytics")
-JSON_PATH = BASE_DIR / "minifigs.json"
-IMAGE_DIR = BASE_DIR / "images"
+# Use path relative to this script's location
+BASE_DIR = Path(__file__).resolve().parent.parent
+JSON_PATH = BASE_DIR / "data" / "minifigs.json"
+IMAGE_DIR = BASE_DIR / "data" / "images"
 
+#%%
 # --- STAP 2: DATA INLADEN ---
 if not JSON_PATH.exists():
     raise FileNotFoundError(f"❌ ERROR: Bestand niet gevonden op {JSON_PATH}")
@@ -30,6 +33,7 @@ df['abs_path'] = df['minifig_number'].apply(lambda x: str(IMAGE_DIR / f"{x}.jpg"
 df = df[df['abs_path'].apply(os.path.exists)].reset_index(drop=True)
 print(f"✅ Geladen: {len(df)} foto's gevonden op de schijf.")
 
+#%%
 # --- STAP 3: TOP 40 SELECTIE ---
 TOP_K = 40
 counts = df['category'].value_counts()
@@ -38,6 +42,7 @@ df_clean = df[df['category'].isin(valid_categories)].copy()
 
 print(f"✅ Top 40 geselecteerd. Totaal {len(df_clean)} afbeeldingen.")
 
+#%%
 # --- STAP 4: DATA SPLIT & GENERATORS ---
 # De Split (70% train, 15% val, 15% test) met 'stratify' voor perfecte balans
 train_df_clean, temp_df = train_test_split(
@@ -77,6 +82,7 @@ test_generator = test_datagen.flow_from_dataframe(
     shuffle=False
 )
 
+#%%
 # --- STAP 5: MODEL CONFIGURATIE & PHASE 1 ---
 class_indices = train_generator.classes
 weights = compute_class_weight(
@@ -120,6 +126,7 @@ history_phase1 = model.fit(
     epochs=10, class_weight=class_weight_dict, callbacks=callbacks
 )
 
+#%%
 # --- STAP 6: PHASE 2 - FINE-TUNING ---
 model.save(os.path.join(BASE_DIR, 'model_phase1_complete.keras'))
 base_model.trainable = True
@@ -141,6 +148,7 @@ history_phase2 = model.fit(
     epochs=10, class_weight=class_weight_dict, callbacks=callbacks
 )
 
+#%%
 # --- STAP 7: SMOOTHED WEIGHTS CORRECTIE ---
 balanced_weights = compute_class_weight(
     class_weight='balanced', classes=np.unique(class_indices), y=class_indices
@@ -160,6 +168,7 @@ print("Starting Correction Phase with smoothed weights...")
 model.fit(train_generator, validation_data=val_generator, epochs=3, class_weight=smoothed_weight_dict)
 model.save(os.path.join(BASE_DIR, 'final_model_smoothed.keras'))
 
+#%%
 # --- STAP 8: EVALUATIE & PLOTS ---
 y_pred_probs_smoothed = model.predict(test_generator)
 y_pred_smoothed = np.argmax(y_pred_probs_smoothed, axis=1)
@@ -177,6 +186,7 @@ plt.xlabel('Voorspeld')
 plt.ylabel('Echt')
 plt.show()
 
+#%%
 # --- STAP 9: GRAD-CAM INTERPRETABILITY ---
 def make_gradcam_heatmap(img_array, model, last_conv_layer_name, pred_index=None):
     base_model = model.layers[0]
