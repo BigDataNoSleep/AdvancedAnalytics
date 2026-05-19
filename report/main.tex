@@ -25,6 +25,7 @@
 \usepackage{float}
 \usepackage{flafter}
 \usepackage{etoolbox}
+\usepackage{booktabs}
 
 \makeatletter
 \patchcmd{\tableofcontents}{\@starttoc}{\vspace{-1.0cm}\@starttoc}{}{}
@@ -104,6 +105,10 @@
 \begin{spacing}{0.9}
 \tableofcontents
 \end{spacing}
+\clearpage
+\begin{spacing}{0.9}
+\listoffigures
+\end{spacing}
 \endgroup
 \clearpage
 
@@ -115,13 +120,19 @@
 
 \clearpage
 
-\mainchapter{Task 2: Lego Minifigure Theme Classification}
+\mainchapter{Task 1: Customer lifetime value prediction}
+
+\input{chapters/1}
+
+\clearpage
+
+\mainchapter{Task 2: Lego minifigure theme classification}
 
 \input{chapters/2}
 
 \clearpage
 
-\mainchapter{Task 3: LLM-Based Recommender System}
+\mainchapter{Task 3: LLM-based recommender system}
 
 \input{chapters/3}
 

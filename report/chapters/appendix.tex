@@ -1,9 +1,9 @@
-\section*{Appendix A: Technical Implementation of Task 3}
-\addcontentsline{toc}{section}{Appendix A: Technical Implementation of Task 3}
+\section*{Appendix A: Technical implementation of Task 3}
+\addcontentsline{toc}{section}{Appendix A: Technical implementation of Task 3}
 
 This appendix contains the primary implementation logic for the Steam RAG Recommender system, with key segments extracted from the \texttt{recommender.py} file.
 
-\subsection*{A.1 LLM-Based Query Expansion and Guardrails}
+\subsection*{A.1 LLM-based query expansion and guardrails}
 The system uses \texttt{Gemma 3 12B IT} to perform self-querying. This stage optimizes the user's natural language input for vector search while extracting metadata constraints and enforcing a relevance guardrail.
 
 \begin{lstlisting}[language=python, caption=The query expansion and guardrail implementation.]
@@ -35,7 +35,7 @@ def rewrite_query(self, query: str) -> dict[str, Any]:
         return {"search_string": query, "filters": {}}
 \end{lstlisting}
 
-\subsection*{A.2 Hybrid Retrieval and Reciprocal Rank Fusion (RRF)}
+\subsection*{A.2 Hybrid retrieval and reciprocal rank fusion (RRF)}
 The retrieval engine combines semantic embeddings and exact keyword matching.
 
 \begin{lstlisting}[language=python, caption=The Hybrid Search and RRF merging logic.]
@@ -73,7 +73,7 @@ def retrieve_candidates(self, query: str, filters: dict[str, Any]) -> list[GameR
     return [r for r in self.records if r.app_id in sorted_app_ids[:n_retrieve]]
 \end{lstlisting}
 
-\subsection*{A.3 Cross-Encoder Re-ranking}
+\subsection*{A.3 Cross-encoder re-ranking}
 This stage improves precision by performing a full attention pass over the query and candidates.
 
 \begin{lstlisting}[language=python, caption=Cross-Encoder re-ranking implementation.]
@@ -90,7 +90,7 @@ def rank_candidates(self, query: str, candidates: list[GameRecord]) -> list[tupl
     return [(record, float(score)) for record, score in ranked]
 \end{lstlisting}
 
-\subsection*{A.4 Generative Answer with SQL Review Augmentation}
+\subsection*{A.4 Generative answer with SQL review augmentation}
 The final stage fetches the most helpful community reviews in real-time to ground the recommendation.
 
 \begin{lstlisting}[language=python, caption=The final generative stage with review injection.]
