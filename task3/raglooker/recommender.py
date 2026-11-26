@@ -101,7 +101,7 @@ class GameSearchEngine:
         self.db_path = db_path
         self.api_key = os.environ.get("GEMINI_API_KEY")
         if not self.api_key:
-            self.api_key = "AIzaSyC1OEagLcMnJLF0odjL54uUwRyJk5dHbjY"
+            self.api_key = ""
             #raise ValueError("GEMINI_API_KEY not found in environment variables.")
 
         # Initialize Gemini Client
